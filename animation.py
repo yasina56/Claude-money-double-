@@ -1328,7 +1328,7 @@ def build_private_jet():
         ball((-2.55, s * 5.8, -0.42), 0.08, "glow_red" if s < 0 else "glow_white", verts=8)
     extrude([(-5.2, 0.5), (-6.9, 0.5), (-7.8, 2.65), (-7.0, 2.65)], 0.14, "jet_white", bevel=0.02)
     extrude([(-6.0, 0.9), (-6.6, 0.9), (-7.45, 2.4), (-7.2, 2.4)], 0.145, "gold")
-    return {"yaw": 0, "spin": 8, "jimmy": (5.2, -0.25, -0.55, 2.1, 90)}
+    return {"yaw": 0, "spin": 8, "jimmy": (5.2, -0.25, -0.35, 1.9, 90)}
 
 
 def build_superyacht():
@@ -1402,12 +1402,12 @@ POSES = {
                     "neck": (0, 0, 25)},
     "skate_b":     {"hip_L": (0, -18, 0), "hip_R": (0, 18, 0), "knee_L": (30, 0, 0), "knee_R": (30, 0, 0),
                     "shoulder_L": (0, -55, 20), "shoulder_R": (0, 85, -20), "spine": (10, 0, -10), "neck": (0, 0, 30)},
-    "drive":       {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (90, 0, 0), "knee_R": (90, 0, 0),
+    "drive":       {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (30, 0, 0), "knee_R": (30, 0, 0),
                     "shoulder_L": (-70, -8, 0), "shoulder_R": (-70, 8, 0), "elbow_L": (-25, 0, 0), "elbow_R": (-25, 0, 0)},
-    "drive_wave":  {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (90, 0, 0), "knee_R": (90, 0, 0),
+    "drive_wave":  {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (30, 0, 0), "knee_R": (30, 0, 0),
                     "shoulder_L": (-70, -8, 0), "elbow_L": (-25, 0, 0), "shoulder_R": (0, 135, 0), "elbow_R": (0, 28, 0),
                     "neck": (0, 0, -55)},
-    "drive_wave2": {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (90, 0, 0), "knee_R": (90, 0, 0),
+    "drive_wave2": {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (30, 0, 0), "knee_R": (30, 0, 0),
                     "shoulder_L": (-70, -8, 0), "elbow_L": (-25, 0, 0), "shoulder_R": (0, 135, 0), "elbow_R": (0, -22, 0),
                     "neck": (0, 0, -55)},
     "ride":        {"hip_L": (-70, 15, 0), "hip_R": (-70, -15, 0), "knee_L": (80, 0, 0), "knee_R": (80, 0, 0),
