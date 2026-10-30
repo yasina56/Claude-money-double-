@@ -7,6 +7,12 @@ inputs:
     description: Blender major.minor series, e.g. "5.2"
     required: false
     default: "5.2"
+  version:
+    description: >
+      Exact version (e.g. "5.2.3"). When set, the download.blender.org index is
+      not queried, so a cache hit needs no network access at all.
+    required: false
+    default: ""
 outputs:
   version:
     description: Full Blender version that was installed
@@ -26,22 +32,34 @@ runs:
       id: resolve
       shell: bash
       run: |
-        series="${{ inputs.series }}"
-        if ! [[ "$series" =~ ^[0-9]+\.[0-9]+$ ]]; then
-          echo "::error title=Bad Blender series::'$series' is not a major.minor series such as 5.2"
-          exit 1
+        version="${{ inputs.version }}"
+        if [ -n "$version" ]; then
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Bad Blender version::'$version' is not a full version such as 5.2.3"
+            exit 1
+          fi
+          series=${version%.*}
+          index="https://download.blender.org/release/Blender${series}/"
+          file="blender-${version}-linux-x64.tar.xz"
+        else
+          series="${{ inputs.series }}"
+          if ! [[ "$series" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Bad Blender series::'$series' is not a major.minor series such as 5.2"
+            exit 1
+          fi
+          index="https://download.blender.org/release/Blender${series}/"
+          # --retry-all-errors: the mirror occasionally answers 403/429 to CI runners
+          listing=$(curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors "$index") || {
+            echo "::error title=Blender download index unreachable::Could not read $index after 5 retries. Check the series exists at https://download.blender.org/release/"
+            exit 1
+          }
+          file=$(grep -oE "blender-${series//./\\.}\.[0-9]+-linux-x64\.tar\.xz" <<<"$listing" | sort -uV | tail -1)
+          if [ -z "$file" ]; then
+            echo "::error title=No Linux build found::$index lists no blender-${series}.x-linux-x64.tar.xz archive"
+            exit 1
+          fi
+          version=${file#blender-}; version=${version%-linux-x64.tar.xz}
         fi
-        index="https://download.blender.org/release/Blender${series}/"
-        listing=$(curl -fsSL --retry 4 --retry-delay 5 "$index") || {
-          echo "::error title=Blender download index unreachable::Could not read $index. Check the series exists at https://download.blender.org/release/"
-          exit 1
-        }
-        file=$(grep -oE "blender-${series//./\\.}\.[0-9]+-linux-x64\.tar\.xz" <<<"$listing" | sort -uV | tail -1)
-        if [ -z "$file" ]; then
-          echo "::error title=No Linux build found::$index lists no blender-${series}.x-linux-x64.tar.xz archive"
-          exit 1
-        fi
-        version=${file#blender-}; version=${version%-linux-x64.tar.xz}
         echo "file=$file" >> "$GITHUB_OUTPUT"
         echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
         echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -59,7 +77,7 @@ runs:
       shell: bash
       run: |
         mkdir -p ~/blender
-        curl -fL --retry 4 --retry-delay 5 -o "$RUNNER_TEMP/blender.tar.xz" "${{ steps.resolve.outputs.url }}" || {
+        curl -fL --retry 5 --retry-delay 10 --retry-all-errors -o "$RUNNER_TEMP/blender.tar.xz" "${{ steps.resolve.outputs.url }}" || {
           echo "::error title=Blender download failed::${{ steps.resolve.outputs.url }}"
           exit 1
         }

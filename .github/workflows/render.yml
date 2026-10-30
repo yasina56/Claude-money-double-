@@ -172,7 +172,9 @@ jobs:
         if: steps.seg-cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-blender
         with:
-          series: ${{ env.BLENDER_SERIES }}
+          # exact version resolved once by the validate job: the Blender cache
+          # hits without querying download.blender.org from every render job
+          version: ${{ needs.validate.outputs.blender_version }}
 
       - name: Render frames on CPU (Cycles)
         if: steps.seg-cache.outputs.cache-hit != 'true'
