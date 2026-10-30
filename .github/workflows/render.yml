@@ -1,8 +1,8 @@
 name: Render animation
 
 # push / pull_request -> fast "smoke" test: validates the full 25-hour scene and
-#                        renders + encodes a 2 s clip (frames 1220-1279).
-# workflow_dispatch    -> full "preview" or "final" render of all 1388 frames.
+#                        renders + encodes the first 2 s of the superyacht reveal.
+# workflow_dispatch    -> full "preview" or "final" render of all 1881 frames (~63 s).
 on:
   push:
     paths: ["animation.py", ".github/workflows/render.yml", ".github/actions/**"]
@@ -11,16 +11,16 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "preview = 540x960 render, every 2nd frame, 12 samples (~15 min). final = full 1080x1920, every frame, 32 samples, motion blur (~21 CPU-hours split across parallel jobs)."
+        description: "preview = 540x960 render, every 2nd frame, 12 samples (~30 min). final = full 1080x1920, every frame, 32 samples, motion blur (~30 CPU-hours split across parallel jobs)."
         type: choice
         options: [preview, final]
         default: preview
       chunks:
-        description: "Parallel render jobs (0 = auto: 8 for preview, 30 for final). Final needs >= 8 to stay under the 6 h job limit."
+        description: "Parallel render jobs (0 = auto: 10 for preview, 40 for final). Final needs >= 10 to stay under the 6 h job limit."
         type: string
         default: "0"
       frames:
-        description: "Optional frame range START-END (1-1388) for a partial render; empty = the whole video"
+        description: "Optional frame range START-END (1-1881) or 'smoke' for a partial render; empty = the whole video"
         type: string
         default: ""
       samples:
@@ -65,7 +65,7 @@ jobs:
             frames="${{ inputs.frames }}"
             chunks="${{ inputs.chunks }}"
           else
-            frames="1220-1279"   # smoke test: the superyacht reveal + coin shower
+            frames="smoke"   # first 2 s of the superyacht reveal (Jimmy on the bow + coin shower)
             chunks="2"
           fi
           if ! [[ "$chunks" =~ ^[0-9]+$ ]]; then
@@ -75,7 +75,7 @@ jobs:
             echo "::error title=Bad input::samples must be a whole number, got '$SAMPLES'"; exit 1
           fi
           if [ "$chunks" = "0" ]; then
-            if [ "$MODE" = "final" ]; then chunks=30; else chunks=8; fi
+            if [ "$MODE" = "final" ]; then chunks=40; else chunks=10; fi
           fi
           if [ "$chunks" -gt 256 ]; then
             echo "::error title=Bad input::GitHub allows at most 256 matrix jobs (got $chunks)"; exit 1

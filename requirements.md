@@ -19,10 +19,10 @@ Measured on a 4-core CPU, which matches a GitHub-hosted `ubuntu-24.04` runner fo
 
 | Mode | Render size | Frames rendered | Samples | Motion blur | Time per frame | Total CPU time |
 |---|---|---:|---:|---|---:|---:|
-| `preview` | 540×960 (encoded at 1080×1920) | 694 (every 2nd) | 12 | off | ~5 s | ~1 h |
-| `final` | 1080×1920 | 1,388 | 32 | on | ~55 s | ~21 h |
+| `preview` | 540×960 (encoded at 1080×1920) | 941 (every 2nd) | 12 | off | ~5–6 s | ~1.5 h |
+| `final` | 1080×1920 | 1,881 | 32 | on | ~55–60 s | ~30 h |
 
-Building the scene takes another 3–4 minutes. The CI workflow builds it once, caches it, and shares it with every render job.
+Per-frame times were measured on the ~46 s version; the totals are extrapolated to the current 1,881 frames. Building the scene, with all 25 Jimmy instances, takes another ~9 minutes. The CI workflow builds it once, caches it, and shares it with every render job.
 
 ## System packages (Linux)
 

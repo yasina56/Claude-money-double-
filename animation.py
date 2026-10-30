@@ -48,7 +48,7 @@ except ImportError:  # allow `python3 animation.py --table` without Blender
 
 FPS = 30
 RES_X, RES_Y = 1080, 1920
-OUTRO_FRAMES = 45            # end-card hold after hour 24
+OUTRO_FRAMES = 54            # end-card hold after hour 24
 HUD_DIST = 1.0               # HUD text plane distance in front of the camera
 LENS_MM, SENSOR_MM = 30.0, 36.0   # vertical sensor fit -> half-height = 0.6 * dist
 HUD_HALF_H = HUD_DIST * (SENSOR_MM / 2) / LENS_MM
@@ -76,36 +76,37 @@ ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 # listings in Oct 2026 where noted in STORYBOARD.md). They are NOT quotes.
 #
 # columns: hour, item shown on screen, est. price USD, model builder,
-#          entrance animation, camera move, stage/environment, frames on screen
+#          entrance animation, camera move, stage/environment, frames on screen,
+#          what Jimmy (the host character) does with it
 PURCHASES = [
-    # --- hours 0-9: rapid-fire (0.7 - 1.0 s each) -------------------------
-    (0,  "A Lollipop",          0.75,       "build_lollipop",    "pop",        "punch_in",      "table",    21),
-    (1,  "A Can of Soda",       1.50,       "build_soda_can",    "drop",       "orbit",         "table",    22),
-    (2,  "A Coffee",            3.50,       "build_coffee",      "drop",       "orbit_r",       "table",    23),
-    (3,  "A Burger & Fries",    7.50,       "build_burger_fries", "drop",      "orbit",         "table",    24),
-    (4,  "A Large Pizza",       15,         "build_pizza",       "flip",       "push_low",      "table",    25),
-    (5,  "A Basketball",        30,         "build_basketball",  "drop",       "orbit_r",       "table",    26),
-    (6,  "A Skateboard",        60,         "build_skateboard",  "drive_in",   "orbit",         "table",    27),
-    (7,  "New Sneakers",        120,        "build_sneakers",    "drop",       "punch_in",      "pedestal", 28),
-    (8,  "Wireless Headphones", 250,        "build_headphones",  "pop",        "orbit_r",       "pedestal", 29),
-    (9,  "A Game Console",      500,        "build_console",     "rise",       "rise_reveal",   "pedestal", 30),
-    # --- hours 10-18: medium reveals (1.6 - 2.2 s each) ---------------------
-    (10, "A New Smartphone",    1_000,      "build_smartphone",  "rise",       "rise_reveal",   "pedestal", 48),
-    (11, "A Gaming Laptop",     1_800,      "build_laptop",      "spin_in",    "orbit",         "pedestal", 50),
-    (12, "An Electric Bike",    4_000,      "build_ebike",       "drive_in",   "tracking",      "pedestal", 52),
-    (13, "A Used Car",          8_000,      "build_used_car",    "drive_in",   "tracking",      "road",     55),
-    (14, "A Motorcycle",        13_000,     "build_motorcycle",  "speed_pass", "low_speed",     "road",     57),
-    (15, "A Brand-New Car",     25_000,     "build_new_car",     "spin_in",    "showroom",      "road",     59),
-    (16, "A Speedboat",         60_000,     "build_speedboat",   "speed_pass", "low_speed",     "ocean",    61),
-    (17, "A Sports Car",        120_000,    "build_sports_car",  "speed_pass", "low_speed",     "road",     64),
-    (18, "A Supercar",          250_000,    "build_supercar",    "slam",       "orbit_r",       "road",     66),
-    # --- hours 19-24: dramatic reveals (2.6 - 4.1 s each) -------------------
-    (19, "A Family House",      420_000,    "build_house",       "build",      "crane_up",      "lawn",     78),
-    (20, "A Mansion",           1_000_000,  "build_mansion",     "build",      "crane_up",      "lawn",     84),
-    (21, "A Private Island",    2_000_000,  "build_island",      "emerge",     "aerial_orbit",  "ocean",    90),
-    (22, "A Helicopter",        3_500_000,  "build_helicopter",  "descend",    "heli_tilt",     "helipad",  96),
-    (23, "A Private Jet",       7_000_000,  "build_private_jet", "fly_by",     "fly_by",        "sky",      104),
-    (24, "A Superyacht",        15_000_000, "build_superyacht",  "emerge",     "epic_pullback", "ocean",    124),
+    # --- hours 0-9: quick beats (1.1 - 1.4 s each) -------------------------
+    (0,  "A Lollipop",          0.75,       "build_lollipop",    "pop",        "punch_in",      "table",    33, "wow"),
+    (1,  "A Can of Soda",       1.50,       "build_soda_can",    "drop",       "orbit",         "table",    34, "thumbs"),
+    (2,  "A Coffee",            3.50,       "build_coffee",      "drop",       "orbit_r",       "table",    35, "present"),
+    (3,  "A Burger & Fries",    7.50,       "build_burger_fries", "drop",      "orbit",         "table",    36, "wow"),
+    (4,  "A Large Pizza",       15,         "build_pizza",       "flip",       "push_low",      "table",    37, "cheer"),
+    (5,  "A Basketball",        30,         "build_basketball",  "drop",       "orbit_r",       "table",    38, "present"),
+    (6,  "A Skateboard",        60,         "build_skateboard",  "drive_in",   "orbit",         "table",    39, "skate"),
+    (7,  "New Sneakers",        120,        "build_sneakers",    "drop",       "punch_in",      "pedestal", 40, "thumbs"),
+    (8,  "Wireless Headphones", 250,        "build_headphones",  "pop",        "orbit_r",       "pedestal", 41, "present"),
+    (9,  "A Game Console",      500,        "build_console",     "rise",       "rise_reveal",   "pedestal", 42, "cheer"),
+    # --- hours 10-18: medium reveals (2.2 - 3.0 s each) ---------------------
+    (10, "A New Smartphone",    1_000,      "build_smartphone",  "rise",       "rise_reveal",   "pedestal", 66, "wow"),
+    (11, "A Gaming Laptop",     1_800,      "build_laptop",      "spin_in",    "orbit",         "pedestal", 69, "present"),
+    (12, "An Electric Bike",    4_000,      "build_ebike",       "drive_in",   "tracking",      "pedestal", 72, "ride"),
+    (13, "A Used Car",          8_000,      "build_used_car",    "drive_in",   "tracking",      "road",     75, "drive"),
+    (14, "A Motorcycle",        13_000,     "build_motorcycle",  "speed_pass", "low_speed",     "road",     78, "ride"),
+    (15, "A Brand-New Car",     25_000,     "build_new_car",     "spin_in",    "showroom",      "road",     81, "drive"),
+    (16, "A Speedboat",         60_000,     "build_speedboat",   "speed_pass", "low_speed",     "ocean",    84, "drive"),
+    (17, "A Sports Car",        120_000,    "build_sports_car",  "speed_pass", "low_speed",     "road",     87, "drive"),
+    (18, "A Supercar",          250_000,    "build_supercar",    "slam",       "orbit_r",       "road",     90, "drive"),
+    # --- hours 19-24: dramatic reveals (3.6 - 5.0 s each) -------------------
+    (19, "A Family House",      420_000,    "build_house",       "build",      "crane_up",      "lawn",     108, "wave"),
+    (20, "A Mansion",           1_000_000,  "build_mansion",     "build",      "crane_up",      "lawn",     114, "cheer"),
+    (21, "A Private Island",    2_000_000,  "build_island",      "emerge",     "aerial_orbit",  "ocean",    120, "wave"),
+    (22, "A Helicopter",        3_500_000,  "build_helicopter",  "descend",    "heli_tilt",     "helipad",  126, "pilot"),
+    (23, "A Private Jet",       7_000_000,  "build_private_jet", "fly_by",     "fly_by",        "sky",      132, "pilot"),
+    (24, "A Superyacht",        15_000_000, "build_superyacht",  "emerge",     "epic_pullback", "ocean",    150, "cheer"),
 ]
 
 # World-space size (largest bbox dimension) each model is normalised to.
@@ -170,6 +171,7 @@ class HourScene:
     camera_move: str
     stage: str
     frames: int
+    jimmy: str = "present"
     start: int = 0
     end: int = 0
 
@@ -220,6 +222,8 @@ def validate_timeline(scenes):
         tag = f"hour {s.hour} ({s.item})"
         if not 0 < s.price <= s.balance:
             errs.append(f"{tag}: price {fmt_money(s.price)} must be > 0 and <= balance {fmt_money(s.balance)}")
+        if s.jimmy not in ACTIONS:
+            errs.append(f"{tag}: unknown Jimmy action {s.jimmy!r} (choose from {sorted(ACTIONS)})")
         if not callable(globals().get(s.model_fn)):
             errs.append(f"{tag}: model builder {s.model_fn!r} is not defined")
         if s.entrance not in ENTRANCES:
@@ -229,7 +233,7 @@ def validate_timeline(scenes):
         if s.stage not in STAGE_LOOK:
             errs.append(f"{tag}: unknown stage {s.stage!r}")
         sec = s.frames / FPS
-        lo, hi = {"rapid": (0.5, 1.05), "medium": (1.4, 2.5), "dramatic": (2.5, 4.5)}[s.tier]
+        lo, hi = {"rapid": (1.0, 1.5), "medium": (2.1, 3.1), "dramatic": (3.5, 5.2)}[s.tier]
         if not lo <= sec <= hi:
             errs.append(f"{tag}: {sec:.2f}s on screen, {s.tier} hours need {lo}-{hi}s")
         if prev is not None:
@@ -239,8 +243,8 @@ def validate_timeline(scenes):
                 errs.append(f"{tag}: gets less screen time than hour {prev.hour}; pacing must build")
         prev = s
     total = total_frames(scenes) / FPS
-    if not 40 <= total <= 50:
-        errs.append(f"total length {total:.1f}s is outside the 40-50s target")
+    if not 55 <= total <= 75:
+        errs.append(f"total length {total:.1f}s is outside the 55-75s target")
     return errs
 
 
@@ -259,6 +263,8 @@ def parse_range(text, n_frames):
 def plan_chunks(scenes, mode, chunks, frame_range=""):
     """Split the frame range into render chunks aligned to the mode's frame step."""
     n = total_frames(scenes)
+    if frame_range == "smoke":  # first 2 s of the superyacht reveal
+        frame_range = f"{scenes[-1].start}-{scenes[-1].start + 2 * FPS - 1}"
     a, b = parse_range(frame_range, n)
     step = RENDER_MODES[mode]["frame_step"]
     frames = list(range(a, b + 1, step))
@@ -281,10 +287,10 @@ def plan_chunks(scenes, mode, chunks, frame_range=""):
 
 def print_table(scenes):
     print(f"{'hr':>2}  {'balance':>12}  {'item':<22} {'est. price':>12}  {'frames':>11}  {'sec':>5}  "
-          f"{'entrance':<10} {'camera':<13} stage")
+          f"{'entrance':<10} {'camera':<13} {'stage':<9} jimmy")
     for s in scenes:
         print(f"{s.hour:>2}  {fmt_money(s.balance):>12}  {s.item:<22} {fmt_money(s.price):>12}  "
-              f"{s.start:>4}-{s.end:<5}  {s.frames / FPS:>5.2f}  {s.entrance:<10} {s.camera_move:<13} {s.stage}")
+              f"{s.start:>4}-{s.end:<5}  {s.frames / FPS:>5.2f}  {s.entrance:<10} {s.camera_move:<13} {s.stage:<9} {s.jimmy}")
     n = total_frames(scenes)
     print(f"total: {n} frames = {n / FPS:.1f} s @ {FPS} fps (incl. {OUTRO_FRAMES}-frame outro)")
 
@@ -306,6 +312,15 @@ PALETTE = {
     "rosegold":   ((0.90, 0.55, 0.45), 1.0, 0.25, 0, 0),
     "glass":      ((0.01, 0.015, 0.02), 0.0, 0.04, 0, 0),
     "droplet":    ((0.90, 0.90, 0.95), 0.0, 0.02, 0, 1),
+    "glass_clear": ((0.04, 0.07, 0.09), 0.0, 0.02, 0, 0),   # see-through: Jimmy visible inside
+    # Jimmy
+    "skin":       ((0.85, 0.58, 0.42), 0.0, 0.50, 0, 0),
+    "hoodie":     ((0.95, 0.42, 0.06), 0.0, 0.60, 0, 0),
+    "hoodie_dark": ((0.70, 0.28, 0.03), 0.0, 0.70, 0, 0),
+    "jeans":      ((0.08, 0.12, 0.28), 0.0, 0.70, 0, 0),
+    "hair":       ((0.22, 0.12, 0.06), 0.0, 0.60, 0, 0),
+    "eye_white":  ((0.95, 0.95, 0.95), 0.0, 0.20, 0, 0),
+    "mouth":      ((0.35, 0.03, 0.05), 0.0, 0.40, 0, 0),
     "wood":       ((0.30, 0.15, 0.06), 0.0, 0.50, 0, 0),
     "maple":      ((0.75, 0.55, 0.32), 0.0, 0.50, 0, 0),
     "teak":       ((0.45, 0.25, 0.10), 0.0, 0.60, 0, 0),
@@ -382,7 +397,7 @@ PALETTE = {
     "hud_shadow": ((0.00, 0.00, 0.00), 0.0, 1.00, 0.0, 0),
     "hud_plate":  ((0.00, 0.00, 0.00), 0.0, 1.00, 0.0, 0),
 }
-ALPHA = {"hud_plate": 0.5}
+ALPHA = {"hud_plate": 0.5, "glass_clear": 0.3}
 _MATS = {}
 
 
@@ -502,6 +517,21 @@ def ball(loc, size, mat, rot=(0, 0, 0), parent=None, verts=32):
     _bake(ob, s)
     _smooth(ob, "all")
     return _finish(ob, loc, rot, mat, parent)
+
+
+def half_ball(loc, size, mat, keep="below", cut=0.0, parent=None, verts=32):
+    """Ellipsoid cut by the horizontal plane z = cut (object space), hole filled."""
+    ob = ball(loc, size, mat, parent=parent, verts=verts)
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], plane_co=(0, 0, cut),
+                           plane_no=(0, 0, 1), clear_outer=keep == "below", clear_inner=keep == "above")
+    bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary])
+    bm.to_mesh(ob.data)
+    bm.free()
+    for p in ob.data.polygons:
+        p.use_smooth = abs(p.normal.z) < 0.99
+    return ob
 
 
 def ring(loc, d, thick, mat, rot=(0, 0, 0), parent=None, verts=48, squash=1.0):
@@ -830,7 +860,7 @@ def build_skateboard():
             hub["role"], hub["radius"] = "wheel", 0.12
             with group(hub):
                 cyl((0, 0, 0), 0.24, 0.12, "teal", rot=(90, 0, 0), bevel=0.03)
-    return {"yaw": 0, "spin": 25}
+    return {"yaw": 0, "spin": 25, "jimmy": (0, 0, 0.39, 3.0, 0)}
 
 
 def _sneaker(accent):
@@ -988,7 +1018,7 @@ def build_ebike():
     for s in (-1, 1):
         tube([(BB[0], s * 0.12, BB[2]), (BB[0] + s * 0.15, s * 0.12, BB[2] - s * 0.15)], 0.02, "steel", smooth=False)
     box((0.78, 0, 1.32), (0.1, 0.12, 0.08), "glow_white")
-    return {"yaw": 0, "spin": 10}
+    return {"yaw": 0, "spin": 10, "jimmy": (-0.42, 0, 1.5, 1.8, 90)}
 
 
 CAR_STYLES = {
@@ -999,44 +1029,68 @@ CAR_STYLES = {
         windows=[[(0.98, 0.99), (0.43, 1.39), (-0.22, 1.40), (-0.22, 0.99)],
                  [(-0.34, 0.99), (-0.34, 1.40), (-0.95, 1.41), (-1.58, 1.02)]],
         windshield=((1.05, 0.95), (0.4, 1.45)), rear=((-1.0, 1.47), (-1.7, 1.0)),
-        paint="paint_beige", rim="steel", wr=0.33, wx=1.45, width=1.75, spoiler=None),
+        paint="paint_beige", rim="steel", wr=0.33, wx=1.45, width=1.75, spoiler=None, seat=(-0.15, -0.35, 0.5, 1.55)),
     "new": dict(
         body=[(-2.3, 0.28), (2.3, 0.28), (2.38, 0.5), (2.25, 0.75), (1.0, 0.92), (0.3, 1.4),
               (-0.9, 1.42), (-1.85, 1.0), (-2.32, 0.93), (-2.4, 0.5)],
         windows=[[(0.95, 0.96), (0.35, 1.35), (-0.25, 1.36), (-0.25, 0.96)],
                  [(-0.37, 0.96), (-0.37, 1.36), (-0.86, 1.37), (-1.7, 1.01)]],
         windshield=((1.0, 0.92), (0.3, 1.4)), rear=((-0.9, 1.42), (-1.85, 1.0)),
-        paint="paint_blue", rim="chrome", wr=0.35, wx=1.45, width=1.82, spoiler=None),
+        paint="paint_blue", rim="chrome", wr=0.35, wx=1.45, width=1.82, spoiler=None, seat=(-0.1, -0.36, 0.48, 1.55)),
     "sports": dict(
         body=[(-2.25, 0.25), (2.25, 0.25), (2.32, 0.45), (2.2, 0.6), (0.75, 0.8), (-0.05, 1.18),
               (-0.8, 1.2), (-2.0, 0.9), (-2.28, 0.85), (-2.34, 0.45)],
         windows=[[(0.68, 0.83), (-0.02, 1.13), (-0.78, 1.15), (-1.35, 0.87)]],
         windshield=((0.75, 0.8), (-0.05, 1.18)), rear=((-0.8, 1.2), (-2.0, 0.9)),
-        paint="paint_red", rim="gunmetal", wr=0.35, wx=1.42, width=1.9, spoiler="lip"),
+        paint="paint_red", rim="gunmetal", wr=0.35, wx=1.42, width=1.9, spoiler="lip", seat=(-0.45, -0.38, 0.38, 1.4)),
     "super": dict(
         body=[(-2.3, 0.22), (2.3, 0.22), (2.4, 0.35), (2.2, 0.5), (0.6, 0.74), (-0.25, 1.07),
               (-0.95, 1.08), (-2.15, 0.85), (-2.38, 0.75), (-2.4, 0.4)],
         windows=[[(0.55, 0.77), (-0.22, 1.02), (-0.92, 1.03), (-1.3, 0.85)]],
         windshield=((0.6, 0.74), (-0.25, 1.07)), rear=((-0.95, 1.08), (-2.15, 0.85)),
-        paint="paint_lime", rim="carbon", wr=0.37, wx=1.45, width=2.0, spoiler="wing"),
+        paint="paint_lime", rim="carbon", wr=0.37, wx=1.45, width=2.0, spoiler="wing", seat=(-0.55, -0.4, 0.34, 1.3)),
 }
+
+
+def clip_profile(poly, z, below):
+    """Clip a closed (x, z) profile to the half-plane z <= z0 (below) or z >= z0."""
+    out = []
+    for i, a in enumerate(poly):
+        b = poly[(i + 1) % len(poly)]
+        ina = a[1] <= z if below else a[1] >= z
+        inb = b[1] <= z if below else b[1] >= z
+        if ina:
+            out.append(a)
+        if ina != inb:
+            t = (z - a[1]) / (b[1] - a[1])
+            out.append((a[0] + t * (b[0] - a[0]), z))
+    return out
 
 
 def build_car(style):
     st = CAR_STYLES[style]
     W = st["width"]
-    extrude(st["body"], W, st["paint"], bevel=0.07)
-    for win in st["windows"]:
+    # opaque body below the beltline, see-through cabin above it (Jimmy drives
+    # inside), roof slab + pillars to keep the silhouette reading as a car
+    belt = min(z for win in st["windows"] for _, z in win)
+    roof = max(z for _, z in st["body"])
+    extrude(clip_profile(st["body"], belt, True), W, st["paint"], bevel=0.07)
+    extrude(clip_profile(st["body"], belt, False), W * 0.94, "glass_clear")
+    extrude(clip_profile(st["body"], roof - 0.07, False), W * 0.96, st["paint"], bevel=0.03)
+    for p0, p1 in (st["windshield"], st["rear"]):
+        ln = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
         for s in (-1, 1):
-            extrude(win, 0.01, "glass", offset=s * (W / 2 + 0.002))
-    for (p0, p1), inset in ((st["windshield"], 0.86), (st["rear"], 0.82)):
-        dx, dz = p1[0] - p0[0], p1[1] - p0[1]
-        ln = math.hypot(dx, dz)
-        nx, nz = dz / ln, -dx / ln
-        if p0[0] < p1[0]:
-            nx, nz = -nx, -nz
-        box(((p0[0] + p1[0]) / 2 + nx * 0.012, 0, (p0[1] + p1[1]) / 2 + nz * 0.012),
-            (ln * 0.9, W * inset, 0.02), "glass", rot=(0, seg_rot_y(p0, p1), 0))
+            box(((p0[0] + p1[0]) / 2, s * W * 0.465, (p0[1] + p1[1]) / 2), (ln, 0.07, 0.07), st["paint"],
+                rot=(0, seg_rot_y(p0, p1), 0), bevel=0.02)
+    if len(st["windows"]) > 1:
+        bx = (st["windows"][0][-1][0] + st["windows"][1][0][0]) / 2
+        box((bx, 0, (belt + roof) / 2), (0.1, W * 0.96, roof - belt), st["paint"])
+    sx, sy, sz, sh = st["seat"]
+    box((st["windshield"][0][0] - 0.12, 0, belt - 0.02), (0.3, W * 0.9, 0.12), "black")
+    ring((sx + 0.48, sy, sz + 0.4), 0.34, 0.04, "black", rot=(0, 65, 0), verts=24)
+    for y in (sy, -sy):
+        box((sx - 0.12, y, sz - 0.06), (0.45, 0.48, 0.12), "leather", bevel=0.03)
+        box((sx - 0.36, y, sz + 0.28), (0.1, 0.48, 0.65), "leather", rot=(0, -12, 0), bevel=0.03)
     wr, wx = st["wr"], st["wx"]
     for x in (-wx, wx):
         for s in (-1, 1):
@@ -1061,7 +1115,7 @@ def build_car(style):
             box((rear + 0.35, s * 0.55, 0.98), (0.1, 0.04, 0.3), "carbon")
             box((0.6, s * (W / 2 + 0.01), 0.42), (0.9, 0.02, 0.18), "black", rot=(0, -6, 0))
         box((rear + 0.3, 0, 1.15), (0.45, W * 0.95, 0.04), "carbon", rot=(0, -6, 0))
-    return {"yaw": 0, "spin": 12}
+    return {"yaw": 0, "spin": 12, "jimmy": (sx, sy, sz, sh, 90)}
 
 
 def build_used_car():
@@ -1096,11 +1150,11 @@ def build_motorcycle():
         box((0.5, s * 0.4, 1.32), (0.04, 0.12, 0.07), "black")
     tube([(0.52, -0.36, 1.2), (0.58, 0, 1.15), (0.52, 0.36, 1.2)], 0.022, "black")
     ball((1.0, 0, 0.82), (0.08, 0.2, 0.12), "glow_white", verts=16)
-    box((0.85, 0, 1.18), (0.25, 0.3, 0.02), "glass", rot=(0, -55, 0))
+    box((0.85, 0, 1.18), (0.25, 0.3, 0.02), "glass_clear", rot=(0, -55, 0))
     box((0.1, 0, 0.52), (0.5, 0.34, 0.4), "gunmetal", bevel=0.05)
     tube([(0.25, 0.18, 0.4), (-0.3, 0.22, 0.38), (-0.7, 0.22, 0.6)], 0.05, "chrome")
     cyl((-0.82, 0.22, 0.66), 0.14, 0.4, "chrome", rot=(0, -70, 0))
-    return {"yaw": 0, "spin": 10}
+    return {"yaw": 0, "spin": 10, "jimmy": (-0.45, 0, 1.12, 1.4, 90)}
 
 
 def build_speedboat():
@@ -1108,7 +1162,8 @@ def build_speedboat():
     for s in (-1, 1):
         box((0.0, s * 1.115, 0.45), (5.0, 0.02, 0.12), "red")
     box((-0.2, 0, 0.75), (2.4, 1.6, 0.3), "white", bevel=0.05)
-    box((0.95, 0, 1.08), (0.06, 1.7, 0.45), "glass", rot=(0, -35, 0))
+    box((0.95, 0, 1.08), (0.06, 1.7, 0.45), "glass_clear", rot=(0, -35, 0))
+    ring((0.72, -0.4, 1.42), 0.34, 0.04, "black", rot=(0, 65, 0), verts=24)
     for y in (-0.4, 0.4):
         box((0.2, y, 1.0), (0.5, 0.5, 0.2), "leather", bevel=0.05)
         box((-0.05, y, 1.25), (0.12, 0.5, 0.45), "leather", bevel=0.04)
@@ -1118,7 +1173,7 @@ def build_speedboat():
         box((-3.25, y, 0.25), (0.15, 0.1, 0.8), "black")
     for s in (-1, 1):
         tube([(1.3, s * 0.9, 0.9), (2.3, s * 0.7, 1.0), (2.9, s * 0.2, 1.05)], 0.02, "chrome")
-    return {"yaw": 0, "waterline": True, "spin": 8}
+    return {"yaw": 0, "waterline": True, "spin": 8, "jimmy": (0.2, -0.4, 1.1, 1.75, 90)}
 
 
 def build_house():
@@ -1151,7 +1206,7 @@ def build_house():
         box((x, -4.3, 0.35), (0.08, 0.05, 0.7), "white")
     box((3.1, -4.3, 0.5), (3.7, 0.04, 0.06), "white")
     box((3.1, -4.3, 0.25), (3.7, 0.04, 0.06), "white")
-    return {"spin": 12}
+    return {"spin": 12, "jimmy": (-0.3, -2.45, 0.1, 1.9, 0)}
 
 
 def build_mansion():
@@ -1198,7 +1253,7 @@ def build_mansion():
         palm(s * 11.5, -1.0, 3.6)
     box((11.0, -9.5, 0.03), (3.4, 5.4, 0.05), "stone")
     box((11.0, -9.5, 0.06), (3.0, 5.0, 0.05), "pool")
-    return {"spin": 10}
+    return {"spin": 10, "jimmy": (0, -3.9, 0.2, 3.2, 0)}
 
 
 def build_island():
@@ -1219,12 +1274,13 @@ def build_island():
         box((x, -2.3, 0.42), (0.35, 0.8, 0.06), "white", rot=(12, 0, 0))
     tube([(2.5, -2.9, 0.3), (2.5, -2.9, 1.2)], 0.025, "white", smooth=False)
     cyl((2.5, -2.9, 1.25), 1.0, 0.2, "red", top=0.05, verts=16)
-    return {"waterline": True, "spin": 15}
+    return {"waterline": True, "spin": 15, "jimmy": (-2.3, -5.2, 0.29, 1.5, 0)}
 
 
 def build_helicopter():
-    ball((0, 0, 1.3), (3.6, 1.5, 1.7), "heli_black")
-    ball((0.85, 0, 1.45), (1.9, 1.32, 1.25), "glass")
+    half_ball((0, 0, 1.3), (3.6, 1.5, 1.7), "heli_black", keep="below")
+    half_ball((0, 0, 1.3), (3.56, 1.46, 1.68), "glass_clear", keep="above")
+    box((0.3, 0, 1.35), (0.5, 0.9, 0.1), "black")
     tube([(-1.3, 0, 1.5), (-4.6, 0, 1.75)], 0.18, "heli_black", smooth=False)
     extrude([(-4.2, 1.6), (-4.8, 1.6), (-5.15, 2.7), (-4.75, 2.7)], 0.08, "heli_black")
     box((-4.2, 0, 1.75), (0.4, 1.4, 0.05), "heli_black")
@@ -1247,13 +1303,13 @@ def build_helicopter():
     with group(trot):
         for k in range(2):
             box((0, 0, 0), (0.08, 0.02, 0.95), "black", rot=(0, k * 90, 0))
-    return {"yaw": 0, "spin": 12}
+    return {"yaw": 0, "spin": 12, "jimmy": (0.75, -0.3, 1.0, 1.45, 90)}
 
 
 def build_private_jet():
     cyl((0.5, 0, 0), 1.6, 9.0, "jet_white", rot=(0, 90, 0))
-    ball((5.0, 0, 0), (3.6, 1.6, 1.6), "jet_white")
-    ball((5.5, 0, 0.32), (1.5, 1.28, 0.7), "glass")
+    half_ball((5.0, 0, 0), (3.6, 1.6, 1.6), "jet_white", keep="below", cut=0.05)
+    half_ball((5.0, 0, 0), (3.58, 1.58, 1.58), "glass_clear", keep="above", cut=0.05)
     cyl((-5.5, 0, 0.12), 1.6, 3.0, "jet_white", rot=(0, -90, 0), top=0.25)
     wing = [(1.6, 0.6), (-0.6, 0.6), (-2.6, 5.8), (-1.6, 5.8)]
     for s in (-1, 1):
@@ -1272,7 +1328,7 @@ def build_private_jet():
         ball((-2.55, s * 5.8, -0.42), 0.08, "glow_red" if s < 0 else "glow_white", verts=8)
     extrude([(-5.2, 0.5), (-6.9, 0.5), (-7.8, 2.65), (-7.0, 2.65)], 0.14, "jet_white", bevel=0.02)
     extrude([(-6.0, 0.9), (-6.6, 0.9), (-7.45, 2.4), (-7.2, 2.4)], 0.145, "gold")
-    return {"yaw": 0, "spin": 8}
+    return {"yaw": 0, "spin": 8, "jimmy": (5.2, -0.25, -0.55, 2.1, 90)}
 
 
 def build_superyacht():
@@ -1312,7 +1368,226 @@ def build_superyacht():
         tube(pts, 0.018, "chrome")
     for i in range(6):
         ball((-5.95 + i * 0.0, (i - 2.5) * 0.36, -0.15), 0.12, "glow_cyan", verts=8)
-    return {"yaw": 0, "waterline": True, "spin": 10}
+    return {"yaw": 0, "waterline": True, "spin": 10, "jimmy": (4.3, 0, 1.18, 1.6, 0)}
+
+
+# ---------------------------------------------------------------------------
+# 6b. JIMMY - the original cartoon host who uses every purchase
+# ---------------------------------------------------------------------------
+# Built once from primitives hung on joint empties (a keyframed FK puppet, no
+# armature or skinning needed), then instanced per hour with shared meshes.
+# Builders say where he sits/stands via meta["jimmy"] = (x, y, z, height, face)
+# in their own units: z is the seat (pelvis) for seated actions, the floor
+# otherwise. Without it he stands beside the item as a presenter.
+
+SEATED_ACTIONS = {"drive", "ride", "pilot"}
+
+# joint -> (rx, ry, rz) in degrees; unlisted joints rest at (0, 0, 0).
+# The character faces -Y; his left side is +X. Arms/legs hang along -Z.
+POSES = {
+    "idle":        {"shoulder_L": (0, -8, 0), "shoulder_R": (0, 8, 0), "elbow_L": (-10, 0, 0), "elbow_R": (-10, 0, 0)},
+    "present":     {"shoulder_L": (-20, -78, 0), "elbow_L": (-8, 0, 0), "shoulder_R": (0, 22, 0), "elbow_R": (-60, 0, 0),
+                    "spine": (0, 0, 8), "neck": (0, 0, 22)},
+    "wow":         {"shoulder_L": (-60, -25, 0), "shoulder_R": (-60, 25, 0), "elbow_L": (-118, 0, 0), "elbow_R": (-118, 0, 0),
+                    "spine": (-8, 0, 0)},
+    "thumbs":      {"shoulder_R": (-78, 15, 0), "elbow_R": (-70, 0, 0), "shoulder_L": (0, -8, 0), "elbow_L": (-10, 0, 0),
+                    "neck": (0, 0, -6)},
+    "cheer":       {"shoulder_L": (0, -155, 0), "shoulder_R": (0, 155, 0), "elbow_L": (-15, 0, 0), "elbow_R": (-15, 0, 0)},
+    "cheer_low":   {"shoulder_L": (0, -115, 0), "shoulder_R": (0, 115, 0), "elbow_L": (-45, 0, 0), "elbow_R": (-45, 0, 0),
+                    "hip_L": (-15, 0, 0), "hip_R": (-15, 0, 0), "knee_L": (25, 0, 0), "knee_R": (25, 0, 0)},
+    "wave_a":      {"shoulder_R": (0, 140, 0), "elbow_R": (0, 28, 0), "shoulder_L": (0, -8, 0), "neck": (0, 0, -8)},
+    "wave_b":      {"shoulder_R": (0, 140, 0), "elbow_R": (0, -22, 0), "shoulder_L": (0, -8, 0), "neck": (0, 0, -8)},
+    "skate":       {"hip_L": (0, -18, 0), "hip_R": (0, 18, 0), "knee_L": (15, 0, 0), "knee_R": (15, 0, 0),
+                    "shoulder_L": (0, -70, 0), "shoulder_R": (0, 70, 0), "elbow_L": (-20, 0, 0), "elbow_R": (-20, 0, 0),
+                    "neck": (0, 0, 25)},
+    "skate_b":     {"hip_L": (0, -18, 0), "hip_R": (0, 18, 0), "knee_L": (30, 0, 0), "knee_R": (30, 0, 0),
+                    "shoulder_L": (0, -55, 20), "shoulder_R": (0, 85, -20), "spine": (10, 0, -10), "neck": (0, 0, 30)},
+    "drive":       {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (90, 0, 0), "knee_R": (90, 0, 0),
+                    "shoulder_L": (-70, -8, 0), "shoulder_R": (-70, 8, 0), "elbow_L": (-25, 0, 0), "elbow_R": (-25, 0, 0)},
+    "drive_wave":  {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (90, 0, 0), "knee_R": (90, 0, 0),
+                    "shoulder_L": (-70, -8, 0), "elbow_L": (-25, 0, 0), "shoulder_R": (0, 135, 0), "elbow_R": (0, 28, 0),
+                    "neck": (0, 0, -55)},
+    "drive_wave2": {"hip_L": (-90, 8, 0), "hip_R": (-90, -8, 0), "knee_L": (90, 0, 0), "knee_R": (90, 0, 0),
+                    "shoulder_L": (-70, -8, 0), "elbow_L": (-25, 0, 0), "shoulder_R": (0, 135, 0), "elbow_R": (0, -22, 0),
+                    "neck": (0, 0, -55)},
+    "ride":        {"hip_L": (-70, 15, 0), "hip_R": (-70, -15, 0), "knee_L": (80, 0, 0), "knee_R": (80, 0, 0),
+                    "spine": (25, 0, 0), "neck": (-20, 0, 0),
+                    "shoulder_L": (-65, -10, 0), "shoulder_R": (-65, 10, 0), "elbow_L": (-20, 0, 0), "elbow_R": (-20, 0, 0)},
+}
+# action -> [(fraction of the hour, pose)]
+ACTIONS = {
+    "present": [(0.0, "idle"), (0.22, "wow"), (0.42, "present"), (0.8, "present"), (0.92, "thumbs")],
+    "wow":     [(0.0, "idle"), (0.25, "wow"), (0.65, "wow"), (0.82, "thumbs")],
+    "thumbs":  [(0.0, "idle"), (0.3, "present"), (0.55, "thumbs"), (0.9, "thumbs")],
+    "cheer":   [(0.0, "idle"), (0.25, "cheer"), (0.4, "cheer_low"), (0.55, "cheer"), (0.7, "cheer_low"), (0.85, "cheer")],
+    "wave":    [(0.0, "idle"), (0.25, "wave_a"), (0.35, "wave_b"), (0.45, "wave_a"), (0.55, "wave_b"),
+                (0.65, "wave_a"), (0.85, "idle")],
+    "skate":   [(0.0, "skate"), (0.5, "skate_b"), (0.85, "skate")],
+    "drive":   [(0.0, "drive"), (0.55, "drive_wave"), (0.65, "drive_wave2"), (0.75, "drive_wave"), (0.9, "drive")],
+    "ride":    [(0.0, "ride"), (0.9, "ride")],
+    "pilot":   [(0.0, "drive"), (0.55, "drive_wave"), (0.65, "drive_wave2"), (0.75, "drive_wave"), (0.9, "drive")],
+}
+MOUTH_O = {"wow", "cheer", "cheer_low"}
+
+
+def build_jimmy_template():
+    """Jimmy: orange "$" hoodie, jeans, white sneakers, brown quiff. Original design."""
+    coll = use_collection("Jimmy_template")
+    root = empty("jimmy", parent=None)
+    root["jimmy"] = True
+
+    def joint(name, loc, parent):
+        e = empty(name, loc, parent)
+        e["joint"] = name
+        return e
+
+    with group(root):
+        ball((0, 0, 0), (0.42, 0.3, 0.26), "jeans")
+        spine = joint("spine", (0, 0, 0.02), root)
+    with group(spine):
+        ball((0, 0, 0.32), (0.5, 0.36, 0.72), "hoodie")
+        cyl((0, 0, 0.02), (0.46, 0.33), 0.1, "hoodie_dark")
+        ball((0, 0.12, 0.6), (0.4, 0.22, 0.2), "hoodie_dark")
+        box((0, -0.172, 0.15), (0.3, 0.03, 0.12), "hoodie_dark", bevel=0.01)
+        text_obj("$", 0.22, "gold", loc=(0, -0.182, 0.42), rot=(90, 0, 0), extrude_=0.012)
+        neck = joint("neck", (0, 0, 0.62), spine)
+        shoulders = {s: joint(f"shoulder_{s}", (x, 0, 0.52), spine) for s, x in (("L", 0.27), ("R", -0.27))}
+    with group(neck):
+        cyl((0, 0, 0.03), 0.12, 0.1, "skin")
+        ball((0, 0, 0.27), (0.5, 0.46, 0.5), "skin")
+        ball((0, 0.03, 0.42), (0.52, 0.48, 0.3), "hair")
+        ball((0.04, -0.14, 0.5), (0.3, 0.22, 0.15), "hair", rot=(25, 0, 0))
+        for s in (-1, 1):
+            ball((s * 0.25, 0, 0.27), (0.07, 0.1, 0.13), "skin")
+            eye = empty("eye", (s * 0.09, -0.2, 0.31))
+            eye["role"] = "eye"
+            with group(eye):
+                ball((0, 0, 0), (0.11, 0.06, 0.13), "eye_white", verts=16)
+                ball((0, -0.033, -0.01), 0.055, "black", verts=12)
+            box((s * 0.09, -0.218, 0.41), (0.1, 0.02, 0.025), "hair", rot=(0, s * -8, 0))
+        ball((0, -0.24, 0.25), 0.065, "skin", verts=16)
+        smile = tube([(-0.075, -0.222, 0.18), (0, -0.236, 0.145), (0.075, -0.222, 0.18)], 0.016, "mouth")
+        smile["role"] = "mouth_smile"
+        mo = ball((0, -0.222, 0.16), (0.085, 0.03, 0.095), "mouth", verts=16)
+        mo["role"] = "mouth_o"
+        mo.scale = (0.001,) * 3
+    for s, sign in (("L", 1), ("R", -1)):
+        with group(shoulders[s]):
+            ball((0, 0, 0), 0.15, "hoodie")
+            cyl((0, 0, -0.15), 0.13, 0.32, "hoodie")
+            elbow = joint(f"elbow_{s}", (0, 0, -0.3), shoulders[s])
+        with group(elbow):
+            cyl((0, 0, -0.12), 0.12, 0.25, "hoodie")
+            ball((0, 0, -0.29), (0.11, 0.09, 0.13), "skin")
+            ball((sign * -0.045, -0.035, -0.26), 0.05, "skin", verts=12)
+        hip = joint(f"hip_{s}", (sign * 0.11, 0, -0.03), root)
+        with group(hip):
+            cyl((0, 0, -0.2), 0.16, 0.42, "jeans")
+            knee = joint(f"knee_{s}", (0, 0, -0.4), hip)
+        with group(knee):
+            cyl((0, 0, -0.19), 0.14, 0.38, "jeans")
+            ball((0, -0.07, -0.41), (0.15, 0.3, 0.13), "white")
+            box((0, -0.07, -0.465), (0.15, 0.3, 0.03), "hoodie", bevel=0.01)
+    bpy.context.view_layer.update()
+    lo, hi = world_bbox(descendants(root))
+    root["height"] = hi.z - lo.z
+    root["pelvis"] = -lo.z
+    bpy.context.view_layer.layer_collection.children[coll.name].exclude = True  # template never renders
+    return root
+
+
+def instance_jimmy(template, name):
+    """Copy the template hierarchy into the active collection (meshes are shared)."""
+    mapping = {}
+    for o in [template] + descendants(template):
+        c = o.copy()
+        bpy.context.collection.objects.link(c)
+        c.hide_render = c.hide_viewport = False
+        mapping[o] = c
+    for o, c in mapping.items():
+        c.parent = mapping.get(o.parent)
+        c.matrix_parent_inverse = o.matrix_parent_inverse.copy()
+    root = mapping[template]
+    root.name = name
+    return root
+
+
+def place_jimmy(sc, template, model, meta):
+    """Seat/stand Jimmy for this hour. Returns his root; meta gains group framing."""
+    j = instance_jimmy(template, f"H{sc.hour:02d}_jimmy")
+    jh, jp = template["height"], template["pelvis"]
+    spot = meta.get("jimmy")
+    if spot:  # attached to the purchase, in the builder's own units
+        x, y, z, h, face = spot
+        s = h / jh
+        j.parent = model
+        j.location = (x, y, z if sc.jimmy in SEATED_ACTIONS else z + jp * s)
+        j.rotation_euler = (0, 0, math.radians(face))
+        j["mode"] = "attached"
+    else:  # presenter standing beside the item, facing it and the camera
+        h = 1.35 if sc.stage == "table" else 1.45
+        s = h / jh
+        j.location = (-(meta["W"] / 2 + 0.55 * h / 1.4), 0.1, jp * s)
+        j.rotation_euler = (0, 0, math.radians(35))
+        j["mode"] = "presenter"
+    j.scale = (s, s, s)
+    j["s"] = s
+    bpy.context.view_layer.update()
+    lo, hi = world_bbox(descendants(model) + descendants(j))
+    meta["cx"] = (lo.x + hi.x) / 2
+    meta["GW"] = max(hi.x - lo.x, hi.y - lo.y)
+    meta["GH"] = hi.z - max(lo.z, 0.0)
+    return j
+
+
+def set_pose(j, frame, pose, interp="BEZIER"):
+    p = POSES[pose]
+    for o in descendants(j):
+        name = o.get("joint")
+        if name:
+            key(o, frame, rot=p.get(name, (0, 0, 0)), interp=interp)
+        role = o.get("role")
+        if role in ("mouth_o", "mouth_smile"):
+            show = (pose in MOUTH_O) == (role == "mouth_o")
+            key(o, frame, scale=1.0 if show else 0.001, interp="CONSTANT")
+
+
+def animate_jimmy(sc, j, f0, f1, fE, follow_from=None):
+    """Entrance, action poses, cheer hops and blinks for one hour."""
+    s = j["s"]
+    base = tuple(j.location)
+    span = f1 - f0
+    start = f0
+    if j["mode"] == "presenter":
+        if follow_from is not None:  # same stage as the previous host: slide over
+            key(j, f0, loc=follow_from, scale=s)
+        else:  # hop in from the left
+            key(j, f0, loc=(base[0] - 0.6, base[1], base[2] + 0.5), scale=0.001, interp="BACK", easing="EASE_OUT")
+        key(j, f0 + 7, loc=base, scale=s)
+    elif sc.entrance == "build":  # appear on the doorstep once the building is up
+        key(j, f0, scale=0.001, interp="CONSTANT")
+        key(j, fE - 1, scale=0.001, interp="BACK", easing="EASE_OUT")
+        key(j, fE + 6, scale=s)
+        start, span = fE, f1 - fE
+    else:
+        key(j, f0, scale=s)
+    jump = 0.28 * j["s"] * 2.0
+    for frac, pose in ACTIONS[sc.jimmy]:
+        f = min(f1 - 1, start + int(frac * span))
+        set_pose(j, f, pose)
+        if sc.jimmy == "cheer" and f > start + 6:
+            key(j, f, loc=(base[0], base[1], base[2] + (jump if pose == "cheer" else 0.0)))
+    eyes = [o for o in descendants(j) if o.get("role") == "eye"]
+    for t in range(f0 + 17, f1 - 4, 61):
+        for e in eyes:
+            key(e, t, scale=1.0, interp="LINEAR")
+            key(e, t + 2, scale=(1, 1, 0.1), interp="LINEAR")
+            key(e, t + 4, scale=1.0)
+
+
+def exit_jimmy(j, f1, X):
+    key(j, f1 - X, scale=j["s"], interp="BACK", easing="EASE_IN")
+    key(j, f1, scale=0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -1578,9 +1853,9 @@ def setup_camera(scene):
     return pivot, cam
 
 
-def key_camera(pivot, cam, frame, az, el, dist, tz, interp="BEZIER"):
+def key_camera(pivot, cam, frame, az, el, dist, tz, interp="BEZIER", cx=0.0):
     e = math.radians(el)
-    key(pivot, frame, loc=(0, 0, tz), rot=(0, 0, az), interp=interp)
+    key(pivot, frame, loc=(cx, 0, tz), rot=(0, 0, az), interp=interp)
     key(cam, frame, loc=(0, -dist * math.cos(e), dist * math.sin(e)), interp=interp)
 
 
@@ -1630,9 +1905,9 @@ def stage_table():
 
 
 def stage_pedestal():
-    cyl((0, 0, -0.25), 2.4, 0.5, "pedestal", verts=64, bevel=0.02)
-    ring((0, 0, -0.005), 2.38, 0.03, "glow_cyan", verts=96)
-    ring((0, 0, -0.45), 2.6, 0.04, "glow_gold", verts=96)
+    cyl((0, 0, -0.25), 4.0, 0.5, "pedestal", verts=64, bevel=0.02)
+    ring((0, 0, -0.005), 3.98, 0.03, "glow_cyan", verts=96)
+    ring((0, 0, -0.45), 4.2, 0.04, "glow_gold", verts=96)
     cyl((0, 0, -0.55), 40, 0.1, "floor_gloss", verts=64)
 
 
@@ -1782,10 +2057,15 @@ def build_product(sc):
     return root, model, meta
 
 
+def entrance_exit(sc, is_last):
+    E = int(clamp(round(sc.frames * (0.45 if sc.entrance == "build" else 0.36)), 8, 60))
+    X = 0 if is_last else int(clamp(round(sc.frames * 0.14), 5, 14))
+    return E, X
+
+
 def animate_product(sc, root, model, meta, is_last, end_frame):
     f0 = sc.start
-    E = int(clamp(round(sc.frames * (0.45 if sc.entrance == "build" else 0.38)), 7, 46))
-    X = 0 if is_last else int(clamp(round(sc.frames * 0.16), 4, 12))
+    E, X = entrance_exit(sc, is_last)
     f1 = end_frame if is_last else sc.end
     fE, fX = f0 + E, f1 - X
     yaw = meta.get("yaw", 0)
@@ -1858,7 +2138,7 @@ def animate_product(sc, root, model, meta, is_last, end_frame):
 
 def animate_build(model, f0, E, s):
     """Mansion/house assemble themselves bottom-up, part by part."""
-    parts = list(model.children)
+    parts = [c for c in model.children if not c.get("jimmy")]
     bpy.context.view_layer.update()
 
     def zmin(o):
@@ -1976,23 +2256,40 @@ def build_scene(args):
                 key(c, b, loc=(x - 14, c.location.y, c.location.z), interp="LINEAR")
 
     fx = FX()
+    template = build_jimmy_template()
     use_collection("HUD")
     hud_lc = bpy.context.view_layer.active_layer_collection
+    prev_host = None  # previous presenter Jimmy, for continuity on the same stage
     for i, sc in enumerate(scenes):
         is_last = i == len(scenes) - 1
         root, model, meta = build_product(sc)
+        jim = place_jimmy(sc, template, model, meta)
         f1 = animate_product(sc, root, model, meta, is_last, n_frames)
+        E, X = entrance_exit(sc, is_last)
+        follow = None
+        if prev_host is not None:
+            pj, pstage, pf1, pX = prev_host
+            if jim["mode"] == "presenter" and pstage == sc.stage:
+                follow = tuple(pj.location)  # same table/pedestal: Jimmy just slides over
+            else:
+                exit_jimmy(pj, pf1, pX)
+        animate_jimmy(sc, jim, sc.start, f1, sc.start + E, follow)
         visible_ranges(root, [(sc.start, f1)], 1, n_frames)
+        if jim["mode"] == "presenter":
+            visible_ranges(jim, [(sc.start, f1)], 1, n_frames)
+            prev_host = (jim, sc.stage, f1, X)
+        else:
+            prev_host = None
         sc.meta = meta
 
-        # camera: whip from previous framing during the first `lead` frames
+        # camera frames Jimmy + item; whips from the previous framing over `lead` frames
         fill = 0.70 + 0.22 * sc.hour / 24
-        dist = max(meta["W"] / (2 * HUD_HALF_W / HUD_DIST * fill), meta["H"] / (0.52 * 2 * HUD_HALF_H / HUD_DIST * fill))
-        lead = 0 if i == 0 else int(clamp(sc.frames * 0.2, 4, 10))
+        dist = max(meta["GW"] / (2 * HUD_HALF_W / HUD_DIST * fill), meta["GH"] / (0.52 * 2 * HUD_HALF_H / HUD_DIST * fill))
+        lead = 0 if i == 0 else int(clamp(sc.frames * 0.2, 4, 12))
         span = sc.end - (sc.start + lead)
         for frac, az, el, dm, tm in CAMERA_MOVES[sc.camera_move]:
             f = sc.start + lead + int(frac * span)
-            key_camera(pivot, cam, f, az, el, dist * dm, meta["H"] * 0.45 * tm)
+            key_camera(pivot, cam, f, az, el, dist * dm, meta["GH"] * 0.45 * tm, cx=meta["cx"])
 
         # FX
         center = (0, 0, meta["H"] * 0.5)
@@ -2011,11 +2308,12 @@ def build_scene(args):
     last = scenes[-1]
     o0 = last.end + 1
     final_dist = last.meta["W"] / (2 * HUD_HALF_W) * 1.15
-    key_camera(pivot, cam, n_frames, 70, 22, final_dist, last.meta["H"] * 0.5)
+    key_camera(pivot, cam, n_frames, 70, 22, final_dist, last.meta["H"] * 0.5, cx=last.meta["cx"])
     for k, (dx, dz) in enumerate(((-2.5, 4.0), (2.5, 5.0), (0.0, 6.0))):
         fx.burst(o0 + k * 10, (dx, 2.0, dz), 2.2, 40, dur=20)
     bpy.context.view_layer.active_layer_collection = hud_lc
-    outro = HourScene(24, last.item, last.price, last.model_fn, "", "", last.stage, OUTRO_FRAMES, o0, n_frames)
+    outro = HourScene(24, last.item, last.price, last.model_fn, "", "", last.stage, OUTRO_FRAMES,
+                      jimmy=last.jimmy, start=o0, end=n_frames)
     hud = build_hud(cam, outro, n_frames, 1, label_override=(
         "FROM $1 TO $16.7 MILLION", "IN JUST 24 HOURS", "THE POWER OF DOUBLING"))
     visible_ranges(hud, [(o0, n_frames)], 1, n_frames)
@@ -2042,6 +2340,9 @@ def validate_scene(scenes):
         parts = [o for o in descendants(root) if o.type in ("MESH", "CURVE", "FONT")]
         if len(parts) < 3:
             errs.append(f"{tag}: only {len(parts)} renderable parts; the 3D model did not build")
+        jim = bpy.data.objects.get(f"H{sc.hour:02d}_jimmy")
+        if jim is None or len([o for o in descendants(jim) if o.type in ("MESH", "CURVE", "FONT")]) < 20:
+            errs.append(f"{tag}: Jimmy is missing or incomplete")
         hud = bpy.data.objects.get(f"HUD_{sc.hour:02d}")
         bodies = {o.data.body for o in descendants(hud) if o.type == "FONT"} if hud else set()
         for want in (sc.text["top"], sc.text["center"], sc.item.upper()):
@@ -2054,6 +2355,8 @@ def validate_scene(scenes):
             errs.append(f"{tag}: product is hidden at its mid-frame {mid}")
         if min(root.matrix_world.to_scale()) < 0.05:
             errs.append(f"{tag}: product is scaled to ~0 at its mid-frame {mid}")
+        if jim is not None and (jim.hide_render or min(jim.matrix_world.to_scale()) < 0.01):
+            errs.append(f"{tag}: Jimmy is hidden or scaled to ~0 at mid-frame {mid}")
         if hud and hud.hide_render:
             errs.append(f"{tag}: HUD is hidden at its mid-frame {mid}")
     scene.frame_set(1)
@@ -2096,7 +2399,7 @@ def parse_args(argv):
     p.add_argument("--validate", action="store_true", help="validate the data table and exit (no Blender needed)")
     p.add_argument("--plan", action="store_true", help="print the JSON render-chunk plan and exit")
     p.add_argument("--chunks", type=int, default=8, help="number of render chunks for --plan")
-    p.add_argument("--frames", default="", help="limit --plan to a frame range START-END")
+    p.add_argument("--frames", default="", help="limit --plan to a frame range START-END (or 'smoke')")
     p.add_argument("--mode", choices=sorted(RENDER_MODES), default="preview")
     p.add_argument("--engine", choices=["CYCLES", "EEVEE"], default="CYCLES")
     p.add_argument("--samples", type=int, default=0, help="override the mode's sample count")
