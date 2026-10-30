@@ -1,0 +1,78 @@
+name: Set up Blender
+description: >
+  Install the newest patch release of a Blender series (e.g. 5.2 -> 5.2.x) from
+  download.blender.org, cached between runs. CPU-only: no GPU is assumed.
+inputs:
+  series:
+    description: Blender major.minor series, e.g. "5.2"
+    required: false
+    default: "5.2"
+outputs:
+  version:
+    description: Full Blender version that was installed
+    value: ${{ steps.resolve.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - name: Install Blender runtime libraries
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends \
+          libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6 \
+          libgl1 libegl1 libglu1-mesa xz-utils > /dev/null
+
+    - name: Resolve Blender ${{ inputs.series }} download
+      id: resolve
+      shell: bash
+      run: |
+        series="${{ inputs.series }}"
+        if ! [[ "$series" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "::error title=Bad Blender series::'$series' is not a major.minor series such as 5.2"
+          exit 1
+        fi
+        index="https://download.blender.org/release/Blender${series}/"
+        listing=$(curl -fsSL --retry 4 --retry-delay 5 "$index") || {
+          echo "::error title=Blender download index unreachable::Could not read $index. Check the series exists at https://download.blender.org/release/"
+          exit 1
+        }
+        file=$(grep -oE "blender-${series//./\\.}\.[0-9]+-linux-x64\.tar\.xz" <<<"$listing" | sort -uV | tail -1)
+        if [ -z "$file" ]; then
+          echo "::error title=No Linux build found::$index lists no blender-${series}.x-linux-x64.tar.xz archive"
+          exit 1
+        fi
+        version=${file#blender-}; version=${version%-linux-x64.tar.xz}
+        echo "file=$file" >> "$GITHUB_OUTPUT"
+        echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Resolved Blender $version"
+
+    - name: Restore cached Blender
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/blender
+        key: blender-${{ steps.resolve.outputs.version }}-linux-x64
+
+    - name: Download Blender ${{ steps.resolve.outputs.version }}
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p ~/blender
+        curl -fL --retry 4 --retry-delay 5 -o "$RUNNER_TEMP/blender.tar.xz" "${{ steps.resolve.outputs.url }}" || {
+          echo "::error title=Blender download failed::${{ steps.resolve.outputs.url }}"
+          exit 1
+        }
+        tar -xJf "$RUNNER_TEMP/blender.tar.xz" -C ~/blender --strip-components=1
+        rm "$RUNNER_TEMP/blender.tar.xz"
+
+    - name: Verify Blender
+      shell: bash
+      run: |
+        echo "$HOME/blender" >> "$GITHUB_PATH"
+        if ! out=$("$HOME/blender/blender" --version 2>&1); then
+          echo "$out"
+          echo "::error title=Blender does not start::The Blender binary failed to run (missing system libraries?)"
+          exit 1
+        fi
+        head -n 1 <<<"$out"

@@ -1,5 +1,5 @@
 """
-money_doubling.py -- "$1 that doubles every hour: what can you buy?"
+animation.py -- "$1 that doubles every hour: what can you buy?"
 
 A data-driven Blender scene generator for a ~46 second vertical (1080x1920)
 TikTok-style animation. Every hour H the balance is exactly 2**H dollars and a
@@ -9,25 +9,22 @@ frame, then morphs out (shrink + spin + sparkle burst) into the next purchase.
 Purchases are examples of purchasing power only: nothing is "spent", the money
 keeps doubling from the original $1.
 
-Usage
------
-  # Print the purchase / timeline table (works without Blender):
-  python3 money_doubling.py --table
+Usage (see README.md for the CI pipeline)
+-----------------------------------------
+  # No Blender needed:
+  python3 animation.py --table                     # purchase / timeline table
+  python3 animation.py --validate                  # check the data table
+  python3 animation.py --plan --mode final --chunks 24   # JSON render matrix
 
-  # Build the scene and open it in Blender:
-  blender -P money_doubling.py
+  # Inside Blender (always pass --python-exit-code 1 so errors fail the run):
+  blender -b --python-exit-code 1 -P animation.py -- --validate-scene --save scene.blend
+  blender -b scene.blend --python-exit-code 1 -P animation.py -- \
+          --use-open-scene --mode preview --render-frames 1-120 --frames-dir frames/
+  blender -b --python-exit-code 1 -P animation.py -- --mode final --render --out //out.mp4
+  blender -P animation.py                          # build and inspect in the UI
 
-  # Build + render the full MP4 headless:
-  blender -b -P money_doubling.py -- --render --out //money_doubling.mp4
-
-  # Quick low-res preview / single frame / save .blend:
-  blender -b -P money_doubling.py -- --preview --render
-  blender -b -P money_doubling.py -- --still 700 --out //frame_700.png
-  blender -b -P money_doubling.py -- --save //money_doubling.blend
-
-Tested with Blender 5.2 (bpy module). Written to also run on 3.6 / 4.x: every
-version-specific API (EEVEE engine id, Principled socket names, layered
-actions, compositor node tree, FFmpeg output) goes through a small fallback.
+Rendering defaults to Cycles on the CPU so it works on GPU-less CI runners.
+Tested with Blender 5.2; version-specific APIs go through small fallbacks.
 """
 
 import argparse
@@ -41,7 +38,7 @@ try:
     import bpy
     import bmesh
     from mathutils import Matrix, Vector
-except ImportError:  # allow `python3 money_doubling.py --table` without Blender
+except ImportError:  # allow `python3 animation.py --table` without Blender
     bpy = None
 
 
@@ -57,6 +54,15 @@ LENS_MM, SENSOR_MM = 30.0, 36.0   # vertical sensor fit -> half-height = 0.6 * d
 HUD_HALF_H = HUD_DIST * (SENSOR_MM / 2) / LENS_MM
 HUD_HALF_W = HUD_HALF_H * RES_X / RES_Y
 SEED = 24
+
+# Software-only (CPU) render presets. "preview" renders every 2nd frame at
+# half resolution; the encoder upsamples to 1080x1920 @ 30 fps either way.
+RENDER_MODES = {
+    "preview": dict(percent=50, samples=12, frame_step=2, motion_blur=False, bounces=3),
+    "final":   dict(percent=100, samples=32, frame_step=1, motion_blur=True, bounces=6),
+}
+ENTRANCES = {"pop", "spin_in", "drop", "flip", "slam", "rise", "drive_in", "speed_pass",
+             "build", "emerge", "descend", "fly_by"}
 FONT_PATH = ""               # optional path to a bold .ttf; default Blender font otherwise
 # Asset override: drop e.g. assets/private_jet.glb (named after the builder
 # without "build_") to replace that procedural model with a licensed asset.
@@ -202,6 +208,75 @@ def build_timeline():
 
 def total_frames(scenes):
     return scenes[-1].end + OUTRO_FRAMES
+
+
+def validate_timeline(scenes):
+    """Return a list of human-readable problems with the PURCHASES table."""
+    errs = []
+    if [s.hour for s in scenes] != list(range(25)):
+        errs.append("PURCHASES must contain hours 0..24 exactly once, in order")
+    prev = None
+    for s in scenes:
+        tag = f"hour {s.hour} ({s.item})"
+        if not 0 < s.price <= s.balance:
+            errs.append(f"{tag}: price {fmt_money(s.price)} must be > 0 and <= balance {fmt_money(s.balance)}")
+        if not callable(globals().get(s.model_fn)):
+            errs.append(f"{tag}: model builder {s.model_fn!r} is not defined")
+        if s.entrance not in ENTRANCES:
+            errs.append(f"{tag}: unknown entrance {s.entrance!r} (choose from {sorted(ENTRANCES)})")
+        if s.camera_move not in CAMERA_MOVES:
+            errs.append(f"{tag}: unknown camera move {s.camera_move!r}")
+        if s.stage not in STAGE_LOOK:
+            errs.append(f"{tag}: unknown stage {s.stage!r}")
+        sec = s.frames / FPS
+        lo, hi = {"rapid": (0.5, 1.05), "medium": (1.4, 2.5), "dramatic": (2.5, 4.5)}[s.tier]
+        if not lo <= sec <= hi:
+            errs.append(f"{tag}: {sec:.2f}s on screen, {s.tier} hours need {lo}-{hi}s")
+        if prev is not None:
+            if s.price <= prev.price:
+                errs.append(f"{tag}: must cost more than hour {prev.hour} ({prev.item})")
+            if s.frames < prev.frames:
+                errs.append(f"{tag}: gets less screen time than hour {prev.hour}; pacing must build")
+        prev = s
+    total = total_frames(scenes) / FPS
+    if not 40 <= total <= 50:
+        errs.append(f"total length {total:.1f}s is outside the 40-50s target")
+    return errs
+
+
+def parse_range(text, n_frames):
+    if not text:
+        return 1, n_frames
+    try:
+        a, b = (int(x) for x in text.split("-"))
+    except ValueError:
+        raise SystemExit(f"error: frame range {text!r} must look like START-END, e.g. 1-120")
+    if not 1 <= a <= b <= n_frames:
+        raise SystemExit(f"error: frame range {text!r} must lie within 1-{n_frames}")
+    return a, b
+
+
+def plan_chunks(scenes, mode, chunks, frame_range=""):
+    """Split the frame range into render chunks aligned to the mode's frame step."""
+    n = total_frames(scenes)
+    a, b = parse_range(frame_range, n)
+    step = RENDER_MODES[mode]["frame_step"]
+    frames = list(range(a, b + 1, step))
+    chunks = max(1, min(chunks, len(frames)))
+    per = -(-len(frames) // chunks)
+    out = []
+    for i in range(0, len(frames), per):
+        part = frames[i:i + per]
+        out.append({"id": f"c{len(out):03d}", "start": part[0], "end": part[-1], "count": len(part)})
+    return {
+        "mode": mode, "fps": FPS, "frame_step": step, "first": a, "last": b,
+        "total_frames": n, "rendered_frames": len(frames),
+        "expected_seconds": round((b - a + 1) / FPS, 3),
+        "width": RES_X, "height": RES_Y,
+        "render_width": RES_X * RENDER_MODES[mode]["percent"] // 100,
+        "render_height": RES_Y * RENDER_MODES[mode]["percent"] // 100,
+        "chunks": out,
+    }
 
 
 def print_table(scenes):
@@ -1323,27 +1398,10 @@ def clamp(v, lo, hi):
 # 8. SCENE SETUP: render, world, lights, camera rig, HUD
 # ---------------------------------------------------------------------------
 
-def setup_render(scene, args, n_frames):
-    for eng in ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE"):
-        try:
-            scene.render.engine = eng
-            break
-        except TypeError:
-            continue
-    if args.engine == "CYCLES":
-        scene.render.engine = "CYCLES"
-        scene.cycles.samples = args.samples or 64
-        scene.cycles.use_denoising = True
-    else:
-        try:
-            scene.eevee.taa_render_samples = args.samples or 64
-        except AttributeError:
-            pass
+def setup_render(scene, n_frames):
     scene.render.resolution_x, scene.render.resolution_y = RES_X, RES_Y
-    scene.render.resolution_percentage = 50 if args.preview else 100
     scene.render.fps = FPS
     scene.frame_start, scene.frame_end = 1, n_frames
-    scene.render.use_motion_blur = True
     try:
         scene.render.motion_blur_shutter = 0.5
     except AttributeError:
@@ -1361,6 +1419,51 @@ def setup_render(scene, args, n_frames):
         except TypeError:
             continue
     setup_glare(scene)
+
+
+def apply_render_mode(scene, mode, engine="CYCLES", samples=0, threads=0):
+    """Engine + quality settings. Cycles on the CPU is the default because CI
+    runners have no GPU (EEVEE needs OpenGL/EGL and fails headless)."""
+    cfg = RENDER_MODES[mode]
+    scene.render.resolution_percentage = cfg["percent"]
+    scene.render.use_motion_blur = cfg["motion_blur"]
+    if engine == "EEVEE":
+        for eng in ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE"):
+            try:
+                scene.render.engine = eng
+                break
+            except TypeError:
+                continue
+        try:
+            scene.eevee.taa_render_samples = samples or 64
+        except AttributeError:
+            pass
+        print("[animation] EEVEE selected: this needs a GPU/OpenGL context and will not run on CI runners")
+    else:
+        scene.render.engine = "CYCLES"
+        cy = scene.cycles
+        cy.device = "CPU"
+        cy.samples = samples or cfg["samples"]
+        cy.use_adaptive_sampling = True
+        cy.adaptive_threshold = 0.05
+        cy.use_denoising = True
+        try:
+            cy.denoiser = "OPENIMAGEDENOISE"
+        except TypeError:
+            pass
+        cy.max_bounces = cfg["bounces"]
+        cy.diffuse_bounces = min(2, cfg["bounces"])
+        cy.glossy_bounces = min(3, cfg["bounces"])
+        cy.transmission_bounces = cfg["bounces"]
+        cy.caustics_reflective = cy.caustics_refractive = False
+        scene.render.use_persistent_data = True  # keep BVH between frames
+    if threads:
+        scene.render.threads_mode = "FIXED"
+        scene.render.threads = threads
+    try:
+        scene.render.compositor_device = "CPU"
+    except AttributeError:
+        pass
 
 
 def setup_glare(scene):
@@ -1403,7 +1506,7 @@ def setup_glare(scene):
         ng.links.new(rl.outputs["Image"], gl.inputs["Image"])
         ng.links.new(gl.outputs["Image"], out.inputs[0])
     except Exception as e:  # compositor API differs across versions; glow is optional
-        print("[money_doubling] glare disabled:", e)
+        print("[animation] glare disabled:", e)
 
 
 def setup_world(scene, scenes):
@@ -1584,7 +1687,7 @@ def stage_ocean():
         mod.choppiness = 0.8
         mod.wind_velocity = 12
     except Exception as e:
-        print("[money_doubling] ocean modifier unavailable, using flat water:", e)
+        print("[animation] ocean modifier unavailable, using flat water:", e)
     return ob
 
 
@@ -1650,7 +1753,7 @@ def import_asset(model_fn):
             for o in set(bpy.data.objects) - before:
                 if o.parent is None:
                     o.parent = _PARENT[0]
-            print(f"[money_doubling] using asset {path}")
+            print(f"[animation] using asset {path}")
             return {"spin": 12, "waterline": name in ("superyacht", "speedboat", "island")}
     return None
 
@@ -1843,7 +1946,7 @@ def build_scene(args):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     _MATS.clear()
     scene = bpy.context.scene
-    setup_render(scene, args, n_frames)
+    setup_render(scene, n_frames)
     setup_world(scene, scenes)
     use_collection("Rig")
     setup_lights(scene, scenes)
@@ -1921,6 +2024,66 @@ def build_scene(args):
     return scenes
 
 
+def validate_scene(scenes):
+    """Post-build checks inside Blender; returns a list of problems."""
+    errs = []
+    scene = bpy.context.scene
+    n = total_frames(scenes)
+    if scene.frame_end != n:
+        errs.append(f"scene ends at frame {scene.frame_end}, expected {n}")
+    if scene.camera is None or scene.camera.parent is None or scene.camera.parent.animation_data is None:
+        errs.append("camera rig is missing or not animated")
+    for sc in scenes:
+        tag = f"hour {sc.hour} ({sc.item})"
+        root = bpy.data.objects.get(f"H{sc.hour:02d}_root")
+        if root is None:
+            errs.append(f"{tag}: product root object is missing")
+            continue
+        parts = [o for o in descendants(root) if o.type in ("MESH", "CURVE", "FONT")]
+        if len(parts) < 3:
+            errs.append(f"{tag}: only {len(parts)} renderable parts; the 3D model did not build")
+        hud = bpy.data.objects.get(f"HUD_{sc.hour:02d}")
+        bodies = {o.data.body for o in descendants(hud) if o.type == "FONT"} if hud else set()
+        for want in (sc.text["top"], sc.text["center"], sc.item.upper()):
+            if want not in bodies:
+                errs.append(f"{tag}: HUD text {want!r} is missing")
+        mid = (sc.start + sc.end) // 2
+        scene.frame_set(mid)
+        model = bpy.data.objects.get(f"H{sc.hour:02d}_model")
+        if root.hide_render or (model and model.hide_render):
+            errs.append(f"{tag}: product is hidden at its mid-frame {mid}")
+        if min(root.matrix_world.to_scale()) < 0.05:
+            errs.append(f"{tag}: product is scaled to ~0 at its mid-frame {mid}")
+        if hud and hud.hide_render:
+            errs.append(f"{tag}: HUD is hidden at its mid-frame {mid}")
+    scene.frame_set(1)
+    return errs
+
+
+def render_frames(scene, mode, frame_range, frames_dir):
+    """Render PNG frames frame_NNNN.png for a chunk and verify they all exist."""
+    a, b = parse_range(frame_range, scene.frame_end)
+    step = RENDER_MODES[mode]["frame_step"]
+    os.makedirs(frames_dir, exist_ok=True)
+    scene.frame_start, scene.frame_end, scene.frame_step = a, b, step
+    im = scene.render.image_settings
+    if hasattr(im, "media_type"):
+        im.media_type = "IMAGE"
+    im.file_format = "PNG"
+    im.color_mode = "RGB"
+    im.color_depth = "8"
+    im.compression = 15
+    scene.render.filepath = os.path.join(os.path.abspath(frames_dir), "frame_####")
+    scene.render.use_file_extension = True
+    print(f"[animation] rendering frames {a}-{b} step {step} ({mode}) -> {frames_dir}")
+    bpy.ops.render.render(animation=True)
+    missing = [f for f in range(a, b + 1, step)
+               if not os.path.exists(os.path.join(frames_dir, f"frame_{f:04d}.png"))]
+    if missing:
+        raise SystemExit(f"error: {len(missing)} frames were not written (first: {missing[:5]}). "
+                         "Check the log above for render errors.")
+
+
 def parse_args(argv):
     if "--" in argv:
         argv = argv[argv.index("--") + 1:]
@@ -1930,29 +2093,75 @@ def parse_args(argv):
         argv = argv[1:]
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--table", action="store_true", help="print the purchase/timeline table and exit")
-    p.add_argument("--render", action="store_true", help="render the animation")
-    p.add_argument("--still", type=int, default=None, help="render a single frame")
-    p.add_argument("--out", default="//money_doubling.mp4")
+    p.add_argument("--validate", action="store_true", help="validate the data table and exit (no Blender needed)")
+    p.add_argument("--plan", action="store_true", help="print the JSON render-chunk plan and exit")
+    p.add_argument("--chunks", type=int, default=8, help="number of render chunks for --plan")
+    p.add_argument("--frames", default="", help="limit --plan to a frame range START-END")
+    p.add_argument("--mode", choices=sorted(RENDER_MODES), default="preview")
+    p.add_argument("--engine", choices=["CYCLES", "EEVEE"], default="CYCLES")
+    p.add_argument("--samples", type=int, default=0, help="override the mode's sample count")
+    p.add_argument("--threads", type=int, default=0, help="render threads (0 = auto)")
+    p.add_argument("--use-open-scene", action="store_true", help="render the already-open .blend instead of rebuilding")
+    p.add_argument("--validate-scene", action="store_true", help="check the built scene; exit non-zero on problems")
     p.add_argument("--save", default=None, help="save the generated .blend")
-    p.add_argument("--engine", choices=["EEVEE", "CYCLES"], default="EEVEE")
-    p.add_argument("--samples", type=int, default=0)
-    p.add_argument("--preview", action="store_true", help="50%% resolution")
+    p.add_argument("--render-frames", default=None, metavar="START-END", help="render PNG frames for a chunk")
+    p.add_argument("--frames-dir", default="frames")
+    p.add_argument("--still", type=int, default=None, help="render a single frame to --out")
+    p.add_argument("--render", action="store_true", help="render the whole video with Blender's own FFmpeg output")
+    p.add_argument("--out", default="//animation.mp4")
     return p.parse_args(argv)
+
+
+def fail(errs, what):
+    print(f"\n{what} FAILED ({len(errs)} problem(s)):", file=sys.stderr)
+    for e in errs:
+        print(f"  - {e}", file=sys.stderr)
+    sys.exit(1)
 
 
 def main():
     args = parse_args(sys.argv)
     scenes = build_timeline()
-    if args.table or bpy is None:
+    if args.table:
         print_table(scenes)
-        if bpy is None and not args.table:
-            print("\n(bpy not available: run inside Blender to build the scene)")
         return
-    build_scene(args)
+    if args.validate:
+        errs = validate_timeline(scenes)
+        if errs:
+            fail(errs, "timeline validation")
+        print_table(scenes)
+        print("timeline validation OK: 25 hours, balance = 2^H, every price <= balance")
+        return
+    if args.plan:
+        import json
+        print(json.dumps(plan_chunks(scenes, args.mode, args.chunks, args.frames)))
+        return
+    if bpy is None:
+        print_table(scenes)
+        print("\n(bpy not available: run inside Blender to build or render the scene)")
+        return
+
+    errs = validate_timeline(scenes)
+    if errs:
+        fail(errs, "timeline validation")
+    if args.use_open_scene:
+        if bpy.data.objects.get("H00_root") is None:
+            fail(["the open .blend was not generated by animation.py (no H00_root)"], "scene check")
+    else:
+        build_scene(args)
     scene = bpy.context.scene
+    if args.validate_scene:
+        errs = validate_scene(scenes)
+        if errs:
+            fail(errs, "scene validation")
+        print(f"scene validation OK: {len(scenes)} hours, {len(bpy.data.objects)} objects, "
+              f"{scene.frame_end} frames")
+    apply_render_mode(scene, args.mode, args.engine, args.samples, args.threads)
     if args.save:
-        bpy.ops.wm.save_as_mainfile(filepath=bpy.path.abspath(args.save))
-    if args.still is not None:
+        bpy.ops.wm.save_as_mainfile(filepath=bpy.path.abspath(args.save), compress=True)
+    if args.render_frames:
+        render_frames(scene, args.mode, args.render_frames, args.frames_dir)
+    elif args.still is not None:
         scene.frame_set(args.still)
         scene.render.image_settings.file_format = "PNG"
         scene.render.filepath = bpy.path.abspath(args.out)
