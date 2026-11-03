@@ -5,6 +5,7 @@ import { CellFlag, type GameEvent } from '../../shared/protocol';
 import { drawCell, hsl, type Painter, type Pt } from './art';
 import type { Sfx } from './audio';
 import type { CellSnap, Net } from './net';
+import { SoftBody } from './softbody';
 
 class PhaserPainter implements Painter {
   constructor(public g: Phaser.GameObjects.Graphics) {}
@@ -37,6 +38,14 @@ interface CellView {
   heading: number;
   missing: number;
   labelKey: string;
+  soft: SoftBody;
+  /** Smoothed motion used to drive the soft body. */
+  mvx: number;
+  mvy: number;
+  max: number;
+  may: number;
+  omega: number;
+  alpha: number;
 }
 
 interface Particle {
@@ -230,7 +239,10 @@ export class GameScene extends Phaser.Scene {
           const n = ev.kind === 'dot' ? 3 : Math.min(18, 4 + ev.amount);
           this.burst(ev.x, ev.y, n, color, ev.kind === 'dot' ? 40 : 160, 3);
           const v = this.views.get(ev.target);
-          if (v && ev.kind !== 'dot') v.jiggle = Math.min(1, v.jiggle + 0.4 + ev.amount / 30);
+          if (v && ev.kind !== 'dot') {
+            v.jiggle = Math.min(1, v.jiggle + 0.4 + ev.amount / 30);
+            v.soft.poke(Math.atan2(ev.y - v.y, ev.x - v.x) - v.heading, Math.min(4, 1.2 + ev.amount / 12));
+          }
           const mine = ev.target === this.net.myId;
           const byMe = ev.source === this.net.myId && ev.source !== 0;
           if (ev.amount >= 1) this.damageNumber(ev.x, ev.y, ev.amount, mine ? 0xff6b81 : byMe ? 0xfff1a8 : ev.kind === 'dot' ? 0xb6ff5a : 0xd8e8ec, ev.blocked, mine || byMe);
@@ -362,10 +374,11 @@ export class GameScene extends Phaser.Scene {
         const label = this.add
           .text(0, 0, '', { fontFamily: 'system-ui, sans-serif', fontSize: '14px', fontStyle: '800', color: '#ffffff', stroke: '#00222a', strokeThickness: 4 })
           .setOrigin(0.5, 0);
-        v = { g, painter: new PhaserPainter(g), label, seed: (id * 2.39996) % TAU, jiggle: 0, x: s.x, y: s.y, r: s.radius, heading: s.heading, missing: 0, labelKey: '' };
+        v = { g, painter: new PhaserPainter(g), label, seed: (id * 2.39996) % TAU, jiggle: 0, x: s.x, y: s.y, r: s.radius, heading: s.heading, missing: 0, labelKey: '', soft: new SoftBody(), mvx: 0, mvy: 0, max: 0, may: 0, omega: 0, alpha: 0 };
         this.views.set(id, v);
       }
       v.missing = 0;
+      this.driveSoftBody(v, s, dt);
       v.x = s.x;
       v.y = s.y;
       v.r = s.radius;
@@ -384,7 +397,7 @@ export class GameScene extends Phaser.Scene {
       const detail = screenR > 60 ? 44 : screenR > 25 ? 32 : 20;
       drawCell(
         v.painter,
-        { x: s.x, y: s.y, radius: s.radius, heading: s.heading, hue: info?.hue ?? 180, organelles: info?.organelles ?? [], flags: s.flags, vx: s.vx, vy: s.vy, seed: v.seed, jiggle: v.jiggle },
+        { x: s.x, y: s.y, radius: s.radius, heading: s.heading, hue: info?.hue ?? 180, organelles: info?.organelles ?? [], flags: s.flags, vx: s.vx, vy: s.vy, seed: v.seed, jiggle: v.jiggle * 0.3, soft: v.soft },
         t,
         detail,
       );
@@ -421,6 +434,46 @@ export class GameScene extends Phaser.Scene {
       v.missing += dt;
       if (v.missing > 0.4) this.destroyView(id);
     }
+  }
+
+  /**
+   * Estimate the cell's acceleration and angular acceleration from its rendered
+   * motion, convert to the cell's local frame in radii/s^2 and step the membrane.
+   */
+  private driveSoftBody(v: CellView, s: CellSnap, dt: number) {
+    if (dt <= 0) return;
+    const jump = Math.hypot(s.x - v.x, s.y - v.y);
+    if (jump > 300) {
+      // Teleport / respawn: no physics for the jump.
+      v.mvx = v.mvy = v.max = v.may = v.omega = v.alpha = 0;
+      return;
+    }
+    const kv = 1 - Math.exp(-dt / 0.07);
+    const ka = 1 - Math.exp(-dt / 0.06);
+    const nvx = (s.x - v.x) / dt;
+    const nvy = (s.y - v.y) / dt;
+    const pvx = v.mvx;
+    const pvy = v.mvy;
+    v.mvx += (nvx - v.mvx) * kv;
+    v.mvy += (nvy - v.mvy) * kv;
+    v.max += ((v.mvx - pvx) / dt - v.max) * ka;
+    v.may += ((v.mvy - pvy) / dt - v.may) * ka;
+    let dh = s.heading - v.heading;
+    dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+    const pOmega = v.omega;
+    v.omega += (dh / dt - v.omega) * kv;
+    v.alpha += ((v.omega - pOmega) / dt - v.alpha) * ka;
+
+    const c = Math.cos(s.heading);
+    const sn = Math.sin(s.heading);
+    const R = Math.max(10, s.radius);
+    // Gain maps real gameplay accelerations (a sharp turn is ~40 radii/s^2 sideways)
+    // to a visible but not rubbery deformation, roughly 0.2 radii at the tail.
+    const GAIN = 0.3;
+    const clampA = (x: number) => clamp(x, -60, 60);
+    const lax = clampA(((v.max * c + v.may * sn) / R) * GAIN);
+    const lay = clampA(((-v.max * sn + v.may * c) / R) * GAIN);
+    v.soft.step(dt, lax, lay, clamp(v.alpha * GAIN, -30, 30), clamp(v.omega, -8, 8));
   }
 
   private destroyView(id: number) {

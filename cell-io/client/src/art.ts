@@ -7,6 +7,7 @@ import { ORGANELLES, TUNING, type Organelle, type OrganelleType } from '../../sh
 import { INTERNAL_SLOTS, organelleAngle, organelleDirection } from '../../shared/placement';
 import { angleDiff, TAU } from '../../shared/math';
 import { CellFlag } from '../../shared/protocol';
+import type { SoftBody } from './softbody';
 
 export interface Pt {
   x: number;
@@ -72,6 +73,8 @@ export interface CellVisual {
   vy: number;
   seed: number;
   jiggle: number; // 0..1 impact wobble
+  /** Optional soft-body membrane (game view); static art leaves it out. */
+  soft?: SoftBody;
   /** Optional: highlight an organelle index (editor ghost). */
   ghostIndex?: number;
   ghostValid?: boolean;
@@ -99,6 +102,25 @@ function membraneR(c: Ctx, th: number) {
   );
 }
 
+/** Membrane point at local angle th, scaled radially (1 = surface), plus a radial offset; includes soft-body deformation. */
+function memPt(c: Ctx, th: number, scale = 1, rOff = 0): Pt {
+  const m = membraneR(c, th) * scale + rOff;
+  const x = Math.cos(th) * m;
+  const y = Math.sin(th) * m;
+  if (!c.v.soft) return { x, y };
+  const o = c.v.soft.sample(th);
+  return { x: x + o.x * scale, y: y + o.y * scale };
+}
+
+/** Interior points slosh with the membrane: blend of the mean offset and the local one. */
+function slosh(c: Ctx, lx: number, ly: number): Pt {
+  const s = c.v.soft;
+  if (!s) return { x: lx, y: ly };
+  const r = Math.hypot(lx, ly);
+  const o = s.sample(Math.atan2(ly, lx));
+  return { x: lx + s.meanX * 0.6 + o.x * r * 0.5, y: ly + s.meanY * 0.6 + o.y * r * 0.5 };
+}
+
 /** Local (radius units, heading-aligned) to world. Applies velocity squash. */
 function T(c: Ctx, lx: number, ly: number): Pt {
   const x = lx * c.sx * c.R;
@@ -110,7 +132,7 @@ const polar = (a: number, r: number) => ({ x: Math.cos(a) * r, y: Math.sin(a) * 
 
 export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
   const speed = Math.hypot(v.vx, v.vy);
-  const stretch = Math.min(0.1, speed / 2600);
+  const stretch = v.soft ? 0 : Math.min(0.1, speed / 2600);
   const c: Ctx = { p, v, t, R: v.radius, cos: Math.cos(v.heading), sin: Math.sin(v.heading), sx: 1 + stretch, sy: 1 - stretch * 0.6 };
   const hue = v.hue;
   const body = hsl(hue, 70, 55);
@@ -132,9 +154,10 @@ export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
   const cyto: Pt[] = [];
   for (let i = 0; i < detail; i++) {
     const th = (i / detail) * TAU;
-    const m = membraneR(c, th);
-    outline.push(T(c, Math.cos(th) * m, Math.sin(th) * m));
-    cyto.push(T(c, Math.cos(th) * m * 0.8, Math.sin(th) * m * 0.8));
+    const a = memPt(c, th);
+    const b = memPt(c, th, 0.8);
+    outline.push(T(c, a.x, a.y));
+    cyto.push(T(c, b.x, b.y));
   }
   p.fill(body, 0.4);
   p.poly(outline, true);
@@ -146,7 +169,8 @@ export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
   for (let k = 0; k < 6; k++) {
     const a = v.seed * 3 + k * 1.7 + t * 0.15 * (k % 2 ? 1 : -1);
     const r = 0.25 + ((k * 37) % 50) / 100;
-    const q = T(c, Math.cos(a) * r, Math.sin(a) * r);
+    const sp = slosh(c, Math.cos(a) * r, Math.sin(a) * r);
+    const q = T(c, sp.x, sp.y);
     p.circle(q.x, q.y, Math.max(1, v.radius * 0.035), true);
   }
 
@@ -221,13 +245,13 @@ export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
 const ghostAlpha = (v: CellVisual, i: number) => (i === v.ghostIndex ? 0.55 + 0.25 * Math.sin(performance.now() / 120) : 1);
 
 function surfaceBase(c: Ctx, at: number, rOff = 0): Pt {
-  const m = membraneR(c, at) + rOff;
-  return polar(at, m);
+  return memPt(c, at, 1, rOff);
 }
 
 function drawNucleus(c: Ctx, hue: number) {
   const pulse = 1 + 0.06 * Math.sin(c.t * 2.4 + c.v.seed);
-  const q = T(c, -0.12, 0.04);
+  const n = slosh(c, -0.12, 0.04);
+  const q = T(c, n.x, n.y);
   c.p.fill(hsl(hue + 30, 55, 38), 0.75);
   c.p.circle(q.x, q.y, c.R * 0.27 * pulse, true);
   c.p.fill(hsl(hue + 30, 60, 60), 0.6);
@@ -299,9 +323,10 @@ function drawArmor(c: Ctx, o: Organelle, alpha: number) {
   const thick = 0.1 + 0.035 * o.level;
   for (let k = 0; k <= n; k++) {
     const th = at - half + (2 * half * k) / n;
-    const m = membraneR(c, th);
-    outer.push(T(c, Math.cos(th) * (m + thick), Math.sin(th) * (m + thick)));
-    innerPts.push(T(c, Math.cos(th) * (m - 0.02), Math.sin(th) * (m - 0.02)));
+    const a = memPt(c, th, 1, thick);
+    const b = memPt(c, th, 1, -0.02);
+    outer.push(T(c, a.x, a.y));
+    innerPts.push(T(c, b.x, b.y));
   }
   const color = o.level >= 3 ? 0x3e5a7a : o.level === 2 ? 0x5f86b8 : 0x86a9d8;
   c.p.fill(color, 0.9 * alpha);
@@ -312,8 +337,9 @@ function drawArmor(c: Ctx, o: Organelle, alpha: number) {
   c.p.stroke(Math.max(1, c.R * 0.02), 0x1d2c40, 0.6 * alpha);
   for (let k = 1; k < 4; k++) {
     const th = at - half + (2 * half * k) / 4;
-    const m = membraneR(c, th);
-    c.p.poly([T(c, Math.cos(th) * m, Math.sin(th) * m), T(c, Math.cos(th) * (m + thick), Math.sin(th) * (m + thick))], false, false);
+    const a = memPt(c, th);
+    const b = memPt(c, th, 1, thick);
+    c.p.poly([T(c, a.x, a.y), T(c, b.x, b.y)], false, false);
   }
 }
 
@@ -326,9 +352,8 @@ function drawCilia(c: Ctx, o: Organelle, alpha: number) {
   c.p.stroke(Math.max(1, c.R * 0.03), 0xc9fbff, 0.85 * alpha);
   for (let k = 0; k < count; k++) {
     const th = at + (k / (count - 1) - 0.5) * 0.5;
-    const m = membraneR(c, th);
     const beat = Math.sin(c.t * 14 + k * 0.9 + c.v.seed) * 0.35;
-    const base = polar(th, m * 0.97);
+    const base = memPt(c, th, 0.97);
     const a1 = th + tilt + beat * 0.5;
     const mid = { x: base.x + Math.cos(a1) * len * 0.5, y: base.y + Math.sin(a1) * len * 0.5 };
     const a2 = a1 + beat;
@@ -360,9 +385,10 @@ function drawFlagellum(c: Ctx, o: Organelle, alpha: number) {
   c.p.poly(pts, false, false);
 }
 
-function internalPos(o: Organelle): Pt {
+function internalPos(c: Ctx, o: Organelle): Pt {
   const s = INTERNAL_SLOTS[o.slot];
-  return polar(s.a, s.r * 0.95);
+  const p = polar(s.a, s.r * 0.95);
+  return slosh(c, p.x, p.y);
 }
 
 function drawVenomDucts(c: Ctx) {
@@ -374,7 +400,7 @@ function drawVenomDucts(c: Ctx) {
     const dir = organelleDirection(d);
     for (const s of sacs) {
       if (s.slot !== 0 && Math.abs(angleDiff(organelleAngle(s), dir)) > TUNING.venomLinkArc) continue;
-      const a = internalPos(s);
+      const a = internalPos(c, s);
       const b = surfaceBase(c, organelleAngle(d), -0.05);
       c.p.poly([T(c, a.x, a.y), T(c, (a.x + b.x) / 2 + 0.05, (a.y + b.y) / 2), T(c, b.x, b.y)], false, false);
     }
@@ -382,7 +408,7 @@ function drawVenomDucts(c: Ctx) {
 }
 
 function drawInternal(c: Ctx, o: Organelle, alpha: number, invalid: boolean) {
-  const lp = internalPos(o);
+  const lp = internalPos(c, o);
   const q = T(c, lp.x, lp.y);
   const R = c.R;
   const pulse = 1 + 0.08 * Math.sin(c.t * 3 + o.slot);
