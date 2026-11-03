@@ -104,7 +104,7 @@ describe('organelle damage', () => {
 });
 
 describe('venom surge', () => {
-  it('requires a linked venom sac and doubles the poison of the next hits', () => {
+  it('requires a linked venom sac and makes the next hits inject double poison stacks', () => {
     const unlinked = pair([o('venom', 1), o('stinger', REAR)], []);
     expect(unlinked.w.venom(unlinked.a)).toBe(false);
 
@@ -116,7 +116,7 @@ describe('venom surge', () => {
     expect(surge.a.energy).toBe(energy - TUNING.venomSurgeCost);
     surge.w.resolveHit(surge.a, surge.d, 1, 0, 30);
     expect(surge.d.poison.stacks).toBe(2 * normal.d.poison.stacks);
-    expect(surge.d.poison.dps).toBeCloseTo(2 * normal.d.poison.dps);
+    expect(surge.d.poison.dps).toBeCloseTo(normal.d.poison.dps);
     // Stacks still cap.
     for (let i = 0; i < 5; i++) surge.w.resolveHit(surge.a, surge.d, 1, 0, 30);
     expect(surge.d.poison.stacks).toBe(TUNING.venomMaxStacks);

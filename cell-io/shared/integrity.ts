@@ -20,7 +20,7 @@ const BASE: Partial<Record<OrganelleType, [number, number, number]>> = {
 export const REGROW_TIME = 12; // seconds a broken organelle needs to regrow
 export const INTEGRITY_HEAL = 0.04; // fraction of max per second when out of combat
 /** Share of a hit's raw (pre-armor) damage that the organelles at the contact point absorb. */
-export const SOAK = { membrane: 0.8, weapon: 0.45, chipOnArmor: 0.5 };
+export const SOAK = { membrane: 0.8, weapon: 0.45, chipOnArmor: 0.3 };
 
 export interface OrganelleHealth {
   hp: number;

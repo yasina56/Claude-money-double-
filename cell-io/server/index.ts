@@ -25,7 +25,7 @@ const http = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, rooms: rooms.all.map((r) => ({ id: r.id, players: r.playerCount, cells: r.world.cells.size })) }));
+    res.end(JSON.stringify({ ok: true, rooms: rooms.all.map((r) => ({ id: r.id, players: r.playerCount, cells: r.world.cells.size, difficulty: Math.round(r.world.aiDifficulty * 100) / 100 })) }));
     return;
   }
   if (!existsSync(STATIC_DIR)) {

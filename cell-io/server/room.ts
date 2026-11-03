@@ -16,9 +16,9 @@ import { capacityForLevel, capacityUsed } from '../shared/placement';
 import { APEX_LEVEL, xpToNext } from '../shared/progression';
 import { CellFlag, type CellInfo, type ClientToServer, type GameEvent, type LeaderboardEntry, type PrivateState, type ServerToClient, type Snapshot } from '../shared/protocol';
 import { DASH_COOLDOWN, EVOLVE_COMBAT_LOCK } from '../shared/constants';
-import { AI_POPULATION, spawnAI, updateAI, type Archetype } from '../shared/sim/ai';
+import { AI_POPULATION, difficultyFor, spawnAI, updateAI, type Archetype } from '../shared/sim/ai';
 import { crackStages, type Cell } from '../shared/sim/cell';
-import { World } from '../shared/sim/world';
+import { movementSlow, World } from '../shared/sim/world';
 
 type GameSocket = Socket<ClientToServer, ServerToClient>;
 
@@ -224,8 +224,19 @@ export class Room {
     this.leaderboardTimer += dt;
     if (this.leaderboardTimer >= 1) {
       this.leaderboardTimer = 0;
+      this.updateDifficulty();
       this.io.to(this.id).emit('leaderboard', this.leaderboard());
     }
+  }
+
+  /** Bot difficulty follows the strongest human in the room (eases off slowly when they die). */
+  updateDifficulty() {
+    let target = 0.15;
+    for (const c of this.world.cells.values()) {
+      if (c.kind === 'player' && c.alive) target = Math.max(target, difficultyFor(c.level, c.biomass));
+    }
+    const w = this.world;
+    w.aiDifficulty += (target - w.aiDifficulty) * (target > w.aiDifficulty ? 0.5 : 0.1);
   }
 
   leaderboard(): LeaderboardEntry[] {
@@ -311,7 +322,7 @@ function privateState(c: Cell, now: number): PrivateState {
     heading: Math.round(c.heading * 10000) / 10000,
     ack: c.inputSeq,
     ackAge: Math.round((now - c.inputAt) * 1000) / 1000,
-    slow: c.poison.time > 0 ? c.poison.slow : 0,
+    slow: movementSlow(c),
     evolving: c.evolving,
     mutations: { ...c.mutations },
     hp: Math.round(c.hp * 10) / 10,

@@ -130,7 +130,7 @@ Spikes, stingers and reinforced membranes have their own integrity (scaled by ce
 So a front-spike hunter that keeps ramming armored fronts will lose its spikes. Turning your armor toward a rammer, or hiding your weapon side, is a real choice.
 
 ### Venom surge
-With a Venom Sac linked to a stinger or spike, **R** (or **Q** without a Toxin Gland) costs 25 energy and has a 10 s cooldown. For 3 s every linked hit injects double poison: two stacks per hit and twice the damage per second, with no per-hit energy cost. Poison still caps at 3 stacks. The weapons glow purple while it is active.
+With a Venom Sac linked to a stinger or spike, **R** (or **Q** without a Toxin Gland) costs 25 energy and has a 10 s cooldown. For 3 s every linked hit injects double poison (two stacks per hit instead of one), with no per-hit energy cost. Poison still caps at 3 stacks. The weapons glow purple while it is active.
 
 ### Directional dash
 The dash fires along your net propulsion vector (the sum of every cilia and flagellum push, relative to your heading). Stronger propulsion dashes up to 50% harder:
@@ -153,6 +153,16 @@ Dead cells burst into nutrients (plus a crystal at level 4+). The killer receive
 * **Defenders**: armored, toxin clouds against anything that hugs them.
 
 AI cells use exactly the same movement, combat and evolution code as players, including server placement validation.
+
+**Layout-aware tactics** (`shared/sim/tactics.ts`). When a bot hunts or is threatened up close, it reads its own layout (best weapon, best armor, net propulsion) and the target's:
+* It points its weapon side at the target. Rear-spike cells turn away from a chaser and brake so it runs onto the spikes.
+* Armored cells without speed turn their plates toward an attacker.
+* Flagellum and cilia kiters hit and run. Bots only dash when the (directional) dash would actually fly toward or away from the target.
+* It swings around armor that faces it to hit an exposed side.
+* It hovers outside a toxin gland that is ready to fire, then strikes while it is on cooldown, and steers out of enemy clouds unless it is about to land an aimed hit.
+* It fires venom surges before aligned hits and toxin clouds at close range.
+
+**Difficulty** follows the strongest human in the room: `difficultyFor(level, biomass)`, 0-1, updated every second. It rises quickly and eases off slowly after that player dies. Higher difficulty means faster reactions (decision interval 0.32 s down to 0.14 s), longer chases and shorter rests, more dashing, earlier cloud avoidance, and stronger spawns (predators and defenders up to +5 levels). `/health` reports each room's current difficulty.
 
 ## Architecture
 

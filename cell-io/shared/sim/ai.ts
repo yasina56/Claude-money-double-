@@ -3,12 +3,13 @@
  * evolution rules as players; the controller only writes `cell.input` and
  * calls the same ability / evolution entry points.
  */
-import { angleDiff, clamp, TAU } from '../math';
+import { clamp, TAU } from '../math';
 import { ORGANELLES, type OrganelleType } from '../organelles';
 import { nearestValidSlot } from '../placement';
 import { xpToNext, type Offer } from '../progression';
 import type { Cell } from './cell';
 import type { World } from './world';
+import { engage, evade, readLayout, type TacticState } from './tactics';
 
 export type Archetype = 'grazer' | 'prey' | 'predator' | 'defender';
 
@@ -21,6 +22,16 @@ export interface AIState {
   /** Seconds spent chasing the current target; predators tire and rest. */
   chase: number;
   rest: number;
+  tactic?: TacticState;
+}
+
+/**
+ * Room difficulty (0..1) from the strongest human present: a fresh room is
+ * gentle; once someone reaches the mid levels bots react faster, chase longer,
+ * dash more and spawn stronger.
+ */
+export function difficultyFor(level: number, biomass: number): number {
+  return clamp((level - 2) / 12 + biomass / 2400, 0, 1);
 }
 
 /** Preferred organelles per archetype, with the local angles they like to mount at. */
@@ -77,7 +88,8 @@ export function spawnAI(world: World, archetype: Archetype): Cell {
   const c = world.addCell('ai', names[Math.floor(r() * names.length)], biomass);
   c.hue = { prey: 100, grazer: 180, predator: 0, defender: 220 }[archetype] + Math.floor(r() * 40 - 20);
   c.ai = { archetype, think: 0, targetId: null, wander: r() * TAU, mode: 'graze', chase: 0, rest: 0 };
-  const level = Math.round(spec.level[0] + r() * (spec.level[1] - spec.level[0]));
+  const boost = Math.round(world.aiDifficulty * (archetype === 'predator' || archetype === 'defender' ? 5 : 2));
+  const level = Math.round(spec.level[0] + r() * (spec.level[1] - spec.level[0])) + boost;
   while (c.level < level) world.addXp(c, xpToNext(c.level) - c.xp);
   autoEvolve(world, c);
   c.hp = c.stats.maxHp;
@@ -138,16 +150,18 @@ function threatLevel(self: Cell, other: Cell): number {
 export function updateAI(world: World, c: Cell, dt: number) {
   const ai = c.ai!;
   if (c.pendingEvolutions > 0) autoEvolve(world, c);
+  const diff = world.aiDifficulty;
   ai.think -= dt;
   if (ai.mode === 'hunt') ai.chase += dt;
   ai.rest = Math.max(0, ai.rest - dt);
-  if (ai.chase > 7) {
+  if (ai.chase > 6 + 5 * diff) {
     ai.chase = 0;
-    ai.rest = 6;
+    ai.rest = 7 - 4 * diff;
     ai.targetId = null;
   }
   if (ai.think > 0) return;
-  ai.think = 0.2 + world.rand() * 0.15;
+  ai.think = 0.32 - 0.18 * diff + world.rand() * 0.1;
+  ai.tactic ??= { retreatUntil: 0 };
 
   const R = c.stats.radius;
   const sense = 420 + R * 3;
@@ -214,26 +228,30 @@ export function updateAI(world: World, c: Cell, dt: number) {
   let dirY = 0;
   let throttle = 0.85;
 
+  const layout = readLayout(c);
+  // Armed defenders and rear-spike cells stand their ground against a close attacker.
+  const standGround = closestThreat && closestThreatD < 120 && !lowHp && (layout.rearWeapon || (ai.archetype === 'defender' && layout.armor));
   if (closestThreat && (ai.archetype !== 'predator' || lowHp || closestThreatD < 60)) {
     ai.mode = 'flee';
-    dirX = fx;
-    dirY = fy;
-    throttle = 1;
-    if (closestThreatD < 80 && c.energy > 40) world.dash(c);
-    if (ai.archetype === 'defender' && closestThreatD < 70) world.toxin(c);
+    if (closestThreatD < 150) {
+      // Close: use the layout (lure into rear spikes, show armor, dash along propulsion).
+      const s = standGround ? engage(world, c, closestThreat, ai.tactic, diff) : evade(world, c, closestThreat, layout, diff);
+      dirX = Math.cos(s.a);
+      dirY = Math.sin(s.a);
+      throttle = s.t;
+    } else {
+      dirX = fx;
+      dirY = fy;
+      throttle = 1;
+    }
   } else if (prey && !lowHp) {
     if (ai.targetId !== prey.id) ai.chase = 0;
     ai.mode = 'hunt';
     ai.targetId = prey.id;
-    const d = Math.hypot(prey.x - c.x, prey.y - c.y);
-    const lead = clamp(d / 400, 0, 0.8);
-    const tx = prey.x + prey.vx * lead;
-    const ty = prey.y + prey.vy * lead;
-    dirX = tx - c.x;
-    dirY = ty - c.y;
-    throttle = 1;
-    const facing = Math.abs(angleDiff(c.heading, Math.atan2(dirY, dirX)));
-    if (d < R + prey.stats.radius + 110 && facing < 0.3 && c.energy > 45) world.dash(c);
+    const s = engage(world, c, prey, ai.tactic, diff);
+    dirX = Math.cos(s.a);
+    dirY = Math.sin(s.a);
+    throttle = s.t;
   } else {
     ai.mode = 'graze';
     let best: { x: number; y: number } | null = null;

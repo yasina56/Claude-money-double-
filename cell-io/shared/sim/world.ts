@@ -73,6 +73,8 @@ export class World {
   clouds: Cloud[] = [];
   hazards: Hazard[] = [];
   events: GameEvent[] = [];
+  /** 0..1, set by the Room from the strongest human present; scales bot behaviour. */
+  aiDifficulty = 0.2;
   /** Called when a cell dies (Room uses it to notify players / respawn AI). */
   onDeath: (cell: Cell, stats: DeathStats) => void = () => {};
 
@@ -380,7 +382,7 @@ export class World {
     c.energy = Math.min(s.energyMax, c.energy + s.energyRegen * dt);
 
     // --- movement (shared with the client predictor) + acid pools
-    integrateMovement(c, s, c.input, { slow: c.poison.time > 0 ? c.poison.slow : 0, evolving: c.evolving }, this.hazards, dt);
+    integrateMovement(c, s, c.input, { slow: movementSlow(c), evolving: c.evolving }, this.hazards, dt);
     for (const h of this.hazards) {
       if (h.kind === 'acid' && Math.hypot(c.x - h.x, c.y - h.y) < h.r) {
         this.damage(c, (5 + c.stats.maxHp * 0.012) * dt, null, 'acid', c.x, c.y, false);
@@ -576,9 +578,9 @@ export class World {
       if (del.venom && (surge || att.energy >= TUNING.venomCost)) {
         if (!surge) att.energy -= TUNING.venomCost;
         const active = def.poison.time > 0;
-        const add = surge ? 2 : 1; // surge injects double poison
+        const add = surge ? 2 : 1; // surge injects double poison (two stacks per hit)
         def.poison.stacks = Math.min(TUNING.venomMaxStacks, (active ? def.poison.stacks : 0) + add);
-        def.poison.dps = Math.max(active ? def.poison.dps : 0, del.venom.dps * (surge ? 2 : 1));
+        def.poison.dps = Math.max(active ? def.poison.dps : 0, del.venom.dps);
         def.poison.slow = Math.max(active ? def.poison.slow : 0, del.venom.slow);
         def.poison.time = TUNING.venomDuration;
         def.poison.source = att.id;
@@ -591,7 +593,7 @@ export class World {
     // Blunt "bump" damage: heavier cells crush lighter ones, but only at speed.
     if (closing > 90) {
       const ratio = clamp(Math.sqrt(att.stats.mass / def.stats.mass), 0.25, 3);
-      const bump = (closing - 90) * 0.03 * ratio * armor;
+      const bump = (closing - 90) * TUNING.bumpFactor * ratio * armor;
       if (bump >= 0.5) {
         this.damage(def, bump, att, 'bump', cx, cy, blocked);
         raw += bump / Math.max(0.05, armor);
@@ -628,14 +630,23 @@ export class World {
   }
 
   private updateClouds(dt: number) {
+    for (const c of this.cells.values()) c.cloudSlow = 0;
+    // Overlapping clouds from the same owner do not stack: each victim takes
+    // the strongest one per owner (like the poison stack cap).
+    const worst = new Map<string, { c: Cell; owner: number; dps: number }>();
     for (const cl of this.clouds) {
       cl.life -= dt;
       this.cellsNear(cl.x, cl.y, cl.r, (c) => {
         if (c.id === cl.owner) return;
         const d = Math.hypot(c.x - cl.x, c.y - cl.y);
-        if (d < cl.r + c.stats.radius * 0.6) this.damage(c, cl.dps * dt, cl.owner, 'toxin', c.x, c.y, false);
+        if (d >= cl.r + c.stats.radius * 0.6) return;
+        const key = `${c.id}:${cl.owner}`;
+        const cur = worst.get(key);
+        if (!cur || cl.dps > cur.dps) worst.set(key, { c, owner: cl.owner, dps: cl.dps });
+        c.cloudSlow = TUNING.toxinSlow;
       });
     }
+    for (const { c, owner, dps } of worst.values()) this.damage(c, dps * dt, owner, 'toxin', c.x, c.y, false);
     this.clouds = this.clouds.filter((c) => c.life > 0);
   }
 
@@ -680,4 +691,9 @@ export class World {
       b.y = this.rand() * this.size;
     }
   }
+}
+
+/** Combined movement slow: the stronger of poison and toxin-cloud slows (they do not stack). */
+export function movementSlow(c: Cell): number {
+  return Math.max(c.poison.time > 0 ? c.poison.slow : 0, c.cloudSlow);
 }

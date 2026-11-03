@@ -94,6 +94,24 @@ describe('multiplayer room', () => {
     a.s.close();
   }, 10000);
 
+  it('bot difficulty follows the strongest human in the room', async () => {
+    const a = client('Strong');
+    const wa = await a.welcome;
+    const room = rooms.all.find((r) => r.world.cells.has(wa.id))!;
+    const before = room.world.aiDifficulty;
+    const me = room.world.cells.get(wa.id)!;
+    me.level = 14;
+    me.biomass = 900;
+    room.updateDifficulty();
+    room.updateDifficulty();
+    expect(room.world.aiDifficulty).toBeGreaterThan(before + 0.3);
+    room.world.removeCell(me.id);
+    const high = room.world.aiDifficulty;
+    room.updateDifficulty();
+    expect(room.world.aiDifficulty).toBeLessThan(high); // eases off once they are gone
+    a.s.close();
+  }, 10000);
+
   it('sanitizes names', () => {
     expect(sanitizeName('<img src=x>')).toBe('img srcx');
     expect(sanitizeName('')).toBe('Nameless Cell');

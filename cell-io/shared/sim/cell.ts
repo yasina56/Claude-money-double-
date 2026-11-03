@@ -42,6 +42,8 @@ export interface Cell {
   toxinCd: number;
   venomCd: number;
   venomSurge: number;
+  /** Movement slow from standing in an enemy toxin cloud (refreshed every tick). */
+  cloudSlow: number;
 
   poison: { stacks: number; time: number; dps: number; slow: number; source: number };
   bleed: { time: number; dps: number; source: number };
@@ -102,6 +104,7 @@ export function createCell(id: number, kind: Cell['kind'], name: string, x: numb
     toxinCd: 0,
     venomCd: 0,
     venomSurge: 0,
+    cloudSlow: 0,
     poison: { stacks: 0, time: 0, dps: 0, slow: 0, source: 0 },
     bleed: { time: 0, dps: 0, source: 0 },
     dotAccum: 0,
