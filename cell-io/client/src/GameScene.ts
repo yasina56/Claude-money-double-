@@ -349,7 +349,7 @@ export class GameScene extends Phaser.Scene {
     this.drawClouds(t);
     this.drawHazardAnim(t);
     this.drawParticles(dt);
-    this.updateCamera(dt);
+    this.updateCamera(Math.min(0.5, deltaMs / 1000));
     this.sendInput(now);
   }
 
@@ -521,6 +521,10 @@ export class GameScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const target = this.focus;
     const k = 1 - Math.exp(-dt * 10);
+    if (Math.hypot(target.x - this.camPos.x, target.y - this.camPos.y) > 800) {
+      // Respawn or teleport: cut instead of a long pan.
+      this.camPos = { x: target.x, y: target.y };
+    }
     this.camPos.x = lerp(this.camPos.x, target.x, k);
     this.camPos.y = lerp(this.camPos.y, target.y, k);
     const z = cameraZoom(target.r, this.scale.width, this.scale.height);

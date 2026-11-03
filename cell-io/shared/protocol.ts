@@ -125,6 +125,8 @@ export interface ClientToServer {
   respawn: () => void;
   /** Development only (server started with CELLIO_DEV=1): grant XP. */
   devXp: (amount: number) => void;
+  /** Development only: teleport next to the nearest other player. */
+  devTp: () => void;
 }
 
 export interface ServerToClient {

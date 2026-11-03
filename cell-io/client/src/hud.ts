@@ -35,7 +35,7 @@ export class Hud {
   update(now: number) {
     const you = this.net.you;
     if (!you) return;
-    setBar(this.hp, you.hp / you.maxHp, `${Math.ceil(you.hp)} / ${you.maxHp}`);
+    setBar(this.hp, you.hp / you.maxHp, `${Math.min(you.maxHp, Math.ceil(you.hp))} / ${you.maxHp}`);
     setBar(this.en, you.energy / you.energyMax, `${Math.floor(you.energy)} / ${you.energyMax} energy`);
     setBar(this.xp, you.xp / you.xpNext, `${you.xp} / ${you.xpNext} XP`);
     this.level.textContent = `Lv ${you.level}${you.apex ? ' ★' : ''}`;

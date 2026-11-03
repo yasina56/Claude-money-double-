@@ -142,6 +142,7 @@ window.addEventListener('keydown', (e) => {
 
 // Dev helper: window.cellioDevXp(500) works when the server runs with CELLIO_DEV=1.
 (window as unknown as { cellioDevXp: (n: number) => void }).cellioDevXp = (n) => net.socket.emit('devXp', n);
+(window as unknown as { cellioDevTp: () => void }).cellioDevTp = () => net.socket.emit('devTp');
 
 function frame() {
   const now = performance.now();
@@ -157,3 +158,6 @@ function frame() {
 }
 frame();
 setScreen('menu');
+
+// Debug handle for automated browser tests and the console.
+(window as unknown as { __cellio: unknown }).__cellio = { net, scene, evo };

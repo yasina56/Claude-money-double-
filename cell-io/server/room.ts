@@ -151,6 +151,14 @@ export class Room {
         const c = cellOf();
         if (c) this.world.addXp(c, Math.max(0, Math.min(5000, Number(amount) || 0)));
       });
+      socket.on('devTp', () => {
+        const c = cellOf();
+        const other = [...this.world.cells.values()].find((o) => o !== c && o.kind === 'player');
+        if (c && other) {
+          c.x = other.x - other.stats.radius - c.stats.radius - 120;
+          c.y = other.y;
+        }
+      });
     }
     socket.on('disconnect', () => {
       const c = cellOf();
