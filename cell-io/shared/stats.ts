@@ -22,6 +22,8 @@ export interface ThrustComponent {
 
 export interface Delivery {
   kind: 'spikes' | 'stinger';
+  /** Index of the organelle in the cell's layout. */
+  index: number;
   dir: number;
   arc: number;
   damage: number;
@@ -30,6 +32,7 @@ export interface Delivery {
 }
 
 export interface ArmorArc {
+  index: number;
   dir: number;
   halfArc: number;
   reduction: number;
@@ -63,7 +66,17 @@ export interface CellStats {
 
 export const EMPTY_MUTATIONS: Mutations = { vitality: 0, metabolism: 0 };
 
-export function computeStats(biomass: number, level: number, organelles: Organelle[], mut: Mutations = EMPTY_MUTATIONS): CellStats {
+/**
+ * @param disabled optional per-organelle flags; disabled (broken) organelles
+ *   contribute nothing until they regrow.
+ */
+export function computeStats(
+  biomass: number,
+  level: number,
+  organelles: Organelle[],
+  mut: Mutations = EMPTY_MUTATIONS,
+  disabled?: readonly boolean[],
+): CellStats {
   const radius = radiusFromBiomass(biomass);
   const sizeRel = radius / 22;
 
@@ -86,7 +99,9 @@ export function computeStats(biomass: number, level: number, organelles: Organel
   let regenCentered = false;
   let mitoCount = 0;
 
-  for (const o of organelles) {
+  for (let index = 0; index < organelles.length; index++) {
+    if (disabled?.[index]) continue;
+    const o = organelles[index];
     const def = ORGANELLES[o.type];
     const li = Math.max(0, Math.min(2, o.level - 1));
     weight += def.weight;
@@ -107,13 +122,13 @@ export function computeStats(biomass: number, level: number, organelles: Organel
         turnPenalty += TUNING.flagTurnPenalty[li];
         break;
       case 'spikes':
-        deliveries.push({ kind: 'spikes', dir, arc: TUNING.spikeArc, damage: TUNING.spikeDmg[li], bleed: li >= 2, venom: null });
+        deliveries.push({ kind: 'spikes', index, dir, arc: TUNING.spikeArc, damage: TUNING.spikeDmg[li], bleed: li >= 2, venom: null });
         break;
       case 'stinger':
-        deliveries.push({ kind: 'stinger', dir, arc: TUNING.stingerArc[li], damage: TUNING.stingerDmg[li], bleed: false, venom: null });
+        deliveries.push({ kind: 'stinger', index, dir, arc: TUNING.stingerArc[li], damage: TUNING.stingerDmg[li], bleed: false, venom: null });
         break;
       case 'membrane':
-        armor.push({ dir: at, halfArc: TUNING.membraneHalfArc, reduction: TUNING.membraneReduction[li] });
+        armor.push({ index, dir: at, halfArc: TUNING.membraneHalfArc, reduction: TUNING.membraneReduction[li] });
         resistance += 0.03;
         bonusHp += 12 + 8 * li;
         break;

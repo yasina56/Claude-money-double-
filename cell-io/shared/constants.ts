@@ -15,7 +15,8 @@ export const BIOMASS_DECAY_START = 350; // above this, biomass slowly decays
 export const BIOMASS_DECAY_RATE = 0.0025; // fraction of the excess per second
 
 export const SPAWN_PROTECTION = 5; // seconds
-export const EVOLVE_PROTECTION = 12; // seconds of protection while customizing
+export const EVOLVE_PROTECTION = 8; // max seconds of protection while customizing (ends early if you steer)
+export const EVOLVE_COMBAT_LOCK = 1.5; // must be out of combat this long before the evolution menu opens
 export const EVOLVE_SLOW = 0.45; // speed multiplier while customizing
 export const COMBAT_TIMEOUT = 4; // seconds without damage before "out of combat"
 export const KILL_CREDIT_WINDOW = 10;

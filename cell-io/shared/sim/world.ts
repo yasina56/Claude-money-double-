@@ -12,6 +12,7 @@ import {
   CRYSTAL_XP,
   DASH_COOLDOWN,
   DASH_COST,
+  EVOLVE_COMBAT_LOCK,
   EVOLVE_PROTECTION,
   KILL_CREDIT_WINDOW,
   MAX_BIOMASS,
@@ -28,7 +29,8 @@ import { capacityForLevel, checkPlacement, MAX_TILT, TILT_STEP } from '../placem
 import { APEX_LEVEL, generateOffers, maxOrganelleLevel, MAX_LEVEL, xpToNext } from '../progression';
 import type { DeathStats, EvolveChoice, GameEvent, Hazard } from '../protocol';
 import { armorMultiplier, deliveryAt } from '../stats';
-import { createCell, refreshStats, type Cell } from './cell';
+import { crackStages, createCell, refreshStats, type Cell } from './cell';
+import { coversAngle, INTEGRITY_HEAL, REGROW_TIME, SOAK } from '../integrity';
 import { dashImpulse, integrateMovement } from './movement';
 import { SpatialGrid } from './spatial';
 
@@ -227,10 +229,56 @@ export class World {
     return true;
   }
 
+  /** Venom surge: for a few seconds every linked hit injects double poison. */
+  venom(c: Cell) {
+    if (!c.alive || c.venomCd > 0 || c.energy < TUNING.venomSurgeCost) return false;
+    if (!c.stats.deliveries.some((d) => d.venom)) return false;
+    c.energy -= TUNING.venomSurgeCost;
+    c.venomCd = TUNING.venomSurgeCooldown;
+    c.venomSurge = TUNING.venomSurgeDuration;
+    this.events.push({ e: 'venom', id: c.id });
+    return true;
+  }
+
+  // ------------------------------------------------------- organelle damage
+
+  /** Damage one organelle's integrity; breaking it disables it until it regrows. */
+  damageOrganelle(c: Cell, index: number, amount: number) {
+    const h = c.orgHealth[index];
+    if (!h || h.max <= 0 || h.regrow > 0 || amount <= 0) return;
+    if (c.spawnProtect > 0) return;
+    if (c.evolveProtect > 0) amount *= 0.3;
+    h.hp -= amount;
+    if (h.hp <= 0) {
+      h.hp = 0;
+      h.regrow = REGROW_TIME;
+      const o = c.organelles[index];
+      refreshStats(c);
+      this.events.push({ e: 'break', id: c.id, x: c.x, y: c.y, type: o.type });
+    }
+    this.publishCracks(c);
+  }
+
+  /** Bump infoVersion when visible crack stages change, so clients redraw cracks. */
+  publishCracks(c: Cell) {
+    const key = crackStages(c).join('');
+    if (key !== c.crackKey) {
+      c.crackKey = key;
+      c.infoVersion++;
+    }
+  }
+
   // ------------------------------------------------------------- evolution
+
+  /** Seconds until the cell has been out of combat long enough to evolve. */
+  combatLock(c: Cell) {
+    return Math.max(0, EVOLVE_COMBAT_LOCK - (this.time - c.lastCombatAt));
+  }
 
   openEvolution(c: Cell) {
     if (!c.alive || c.pendingEvolutions <= 0) return null;
+    // No level-up stalling mid-fight: the menu is queued until you disengage.
+    if (this.combatLock(c) > 0) return null;
     if (!c.offers) c.offers = generateOffers({ level: c.level, organelles: c.organelles }, this.rand);
     c.evolving = true;
     if (!c.evolveProtectGranted) {
@@ -323,6 +371,10 @@ export class World {
     c.dashCd = Math.max(0, c.dashCd - dt);
     c.dashTime = Math.max(0, c.dashTime - dt);
     c.toxinCd = Math.max(0, c.toxinCd - dt);
+    c.venomCd = Math.max(0, c.venomCd - dt);
+    c.venomSurge = Math.max(0, c.venomSurge - dt);
+    // Steering while protected in the editor ends the protection (no roaming invulnerable).
+    if (c.evolving && c.evolveProtect > 0 && c.input.t > 0.15) c.evolveProtect = 0;
     c.spawnProtect = Math.max(0, c.spawnProtect - dt);
     c.evolveProtect = Math.max(0, c.evolveProtect - dt);
     c.energy = Math.min(s.energyMax, c.energy + s.energyRegen * dt);
@@ -356,6 +408,7 @@ export class World {
 
     // --- healing
     const outOfCombat = this.time - c.lastCombatAt > COMBAT_TIMEOUT;
+    this.updateIntegrity(c, dt, outOfCombat);
     c.regenActive = false;
     if (c.hp < s.maxHp) {
       if (outOfCombat) c.hp += s.maxHp * 0.002 * dt; // everyone recovers a little
@@ -375,6 +428,28 @@ export class World {
       c.biomass -= (c.biomass - BIOMASS_DECAY_START) * BIOMASS_DECAY_RATE * dt;
       if (Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2)) refreshStats(c);
     }
+  }
+
+  private updateIntegrity(c: Cell, dt: number, outOfCombat: boolean) {
+    let changed = false;
+    for (let i = 0; i < c.orgHealth.length; i++) {
+      const h = c.orgHealth[i];
+      if (h.max <= 0) continue;
+      if (h.regrow > 0) {
+        h.regrow -= dt;
+        if (h.regrow <= 0) {
+          h.regrow = 0;
+          h.hp = h.max;
+          refreshStats(c);
+          this.events.push({ e: 'regrow', id: c.id, type: c.organelles[i].type });
+          changed = true;
+        }
+      } else if (outOfCombat && h.hp < h.max) {
+        h.hp = Math.min(h.max, h.hp + h.max * INTEGRITY_HEAL * dt);
+        changed = true;
+      }
+    }
+    if (changed) this.publishCracks(c);
   }
 
   private collectNutrients() {
@@ -490,20 +565,26 @@ export class World {
     let hit = false;
 
     const del = deliveryAt(att.stats, contactAtt);
+    let raw = 0;
     if (del && (del.kind === 'stinger' || closing > 40)) {
       const impact = clamp(0.35 + closing / 220, 0.35, 2);
-      const dmg = del.damage * att.stats.sizeFactor * impact * armor;
+      raw = del.damage * att.stats.sizeFactor * impact;
+      const dmg = raw * armor;
       this.damage(def, dmg, att, del.kind === 'spikes' ? 'spike' : 'sting', cx, cy, blocked);
       if (del.bleed) def.bleed = { time: 3, dps: 3 * att.stats.sizeFactor * armor, source: att.id };
-      if (del.venom && att.energy >= TUNING.venomCost) {
-        att.energy -= TUNING.venomCost;
+      const surge = att.venomSurge > 0;
+      if (del.venom && (surge || att.energy >= TUNING.venomCost)) {
+        if (!surge) att.energy -= TUNING.venomCost;
         const active = def.poison.time > 0;
-        def.poison.stacks = active ? Math.min(TUNING.venomMaxStacks, def.poison.stacks + 1) : 1;
-        def.poison.dps = Math.max(active ? def.poison.dps : 0, del.venom.dps);
+        const add = surge ? 2 : 1; // surge injects double poison
+        def.poison.stacks = Math.min(TUNING.venomMaxStacks, (active ? def.poison.stacks : 0) + add);
+        def.poison.dps = Math.max(active ? def.poison.dps : 0, del.venom.dps * (surge ? 2 : 1));
         def.poison.slow = Math.max(active ? def.poison.slow : 0, del.venom.slow);
         def.poison.time = TUNING.venomDuration;
         def.poison.source = att.id;
       }
+      // Weapons chip when they strike armor.
+      if (armor < 1) this.damageOrganelle(att, del.index, raw * (1 - armor) * SOAK.chipOnArmor);
       hit = true;
     }
 
@@ -513,7 +594,17 @@ export class World {
       const bump = (closing - 90) * 0.03 * ratio * armor;
       if (bump >= 0.5) {
         this.damage(def, bump, att, 'bump', cx, cy, blocked);
+        raw += bump / Math.max(0.05, armor);
         hit = true;
+      }
+    }
+    // The defender's organelles at the contact point take part of the blow:
+    // armor soaks it, exposed weapons on that side clash and crack.
+    if (raw > 0 && def.spawnProtect <= 0) {
+      for (let i = 0; i < def.organelles.length; i++) {
+        const o = def.organelles[i];
+        if (!coversAngle(o, contactDef)) continue;
+        this.damageOrganelle(def, i, raw * (o.type === 'membrane' ? SOAK.membrane : SOAK.weapon));
       }
     }
     return hit;

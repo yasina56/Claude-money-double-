@@ -47,8 +47,9 @@ Dev cheats: start the server with `CELLIO_DEV=1` and, in the browser console, ru
 | Input | Action |
 |---|---|
 | Mouse | Steer. The cell follows the cursor; the further the cursor, the faster you go. |
-| Space | Dash burst (28 energy, 2.6 s cooldown) |
-| Q | Toxin cloud (needs a Toxin Gland) |
+| Space | Dash burst (28 energy, 2.6 s cooldown). Fires along your propulsion layout (see below). |
+| Q | Toxin cloud (needs a Toxin Gland); venom surge if you have a linked Venom Sac and no gland |
+| R | Venom surge (needs a Venom Sac linked to a stinger or spike) |
 | E | Open the evolution screen when an evolution is pending |
 | M | Mute |
 | F3 | Network debug overlay: ping, snapshot rate, interpolation buffer, prediction error, nutrient delta rate |
@@ -116,7 +117,31 @@ Anti-exploit rules:
 * Each pair of cells has a 0.35 s hit cooldown.
 * Poison stacks are capped at 3 and refresh instead of stacking.
 * New players get 5 s of spawn protection and spawn far from larger armed cells. AI predators ignore level 1-2 players and tire after a 7 s chase.
-* Evolution protection (12 s, −70% damage, 45% speed, no damage dealt) is granted only once per pending evolution.
+* Evolution protection (−70% damage, 45% speed, no damage dealt) is granted once per pending evolution. It lasts at most 8 s and ends the moment you steer while the editor is open. The menu cannot open within 1.5 s of taking or dealing damage: it is queued ("Evolution queued: get out of combat") and opens on its own once you disengage. The server enforces all of this.
+
+### Organelle damage (protect your weapon side)
+Spikes, stingers and reinforced membranes have their own integrity (scaled by cell size; see `shared/integrity.ts`). Every hit is resolved at a contact angle, and that angle decides what gets hurt:
+* A **membrane** covering the struck side soaks 80% of the hit's raw damage into its own integrity, on top of reducing what reaches your HP.
+* **Spikes or stingers** pointing at the struck side clash and take 45%. Weapons pointing elsewhere are untouched.
+* Weapons that ram **armor** chip by half of the damage the armor blocked.
+* A broken organelle contributes nothing (no hit arc, no armor, no weight) and regrows after **12 s**. Damaged ones heal 4% per second out of combat.
+* Clients see three crack stages: hairline cracks, deep cracks with a bruised tint, then a regrowing stub (or loose shards for a membrane). A crunch plays when something breaks.
+
+So a front-spike hunter that keeps ramming armored fronts will lose its spikes. Turning your armor toward a rammer, or hiding your weapon side, is a real choice.
+
+### Venom surge
+With a Venom Sac linked to a stinger or spike, **R** (or **Q** without a Toxin Gland) costs 25 energy and has a 10 s cooldown. For 3 s every linked hit injects double poison: two stacks per hit and twice the damage per second, with no per-hit energy cost. Poison still caps at 3 stacks. The weapons glow purple while it is active.
+
+### Directional dash
+The dash fires along your net propulsion vector (the sum of every cilia and flagellum push, relative to your heading). Stronger propulsion dashes up to 50% harder:
+* A rear flagellum dashes straight ahead, whatever you are steering at.
+* A side flagellum gives a sideways dodge.
+* If the layout cancels out (an even ring of cilia, or no propulsion), the dash follows your steering, as before.
+
+The rule lives in `shared/sim/movement.ts`, so client prediction replays dashes exactly.
+
+### Strategy badges
+Every cell shows a badge under its name, read from its layout by `shared/strategy.ts`: **Hunter**, **Tank**, **Speedster**, **Toxic** or **Hybrid** (no clear leader). Placement counts: front spikes say Hunter, rear spikes count toward Tank, and only a rear-mounted flagellum counts as a sprint build.
 
 Dead cells burst into nutrients (plus a crystal at level 4+). The killer receives 35% of the victim's biomass and bonus XP.
 

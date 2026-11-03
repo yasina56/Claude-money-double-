@@ -73,6 +73,8 @@ export interface CellVisual {
   vy: number;
   seed: number;
   jiggle: number; // 0..1 impact wobble
+  /** Per-organelle crack stage (0 intact, 1-2 cracked, 3 broken and regrowing). */
+  cracks?: readonly number[];
   /** Optional soft-body membrane (game view); static art leaves it out. */
   soft?: SoftBody;
   /** Optional: highlight an organelle index (editor ghost). */
@@ -189,13 +191,24 @@ export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
   // Front-layer surface organelles
   v.organelles.forEach((o, i) => {
     const a = ghostAlpha(v, i);
-    if (o.type === 'membrane') drawArmor(c, o, a);
+    if (o.type === 'membrane') drawArmor(c, o, a, v.cracks?.[i] ?? 0);
   });
   v.organelles.forEach((o, i) => {
     const a = ghostAlpha(v, i);
-    if (o.type === 'spikes') drawSpike(c, o, a);
-    if (o.type === 'stinger') drawStinger(c, o, a);
+    if (o.type === 'spikes') drawSpike(c, o, a, v.cracks?.[i] ?? 0);
+    if (o.type === 'stinger') drawStinger(c, o, a, v.cracks?.[i] ?? 0);
   });
+  if (v.flags & CellFlag.VenomSurge) {
+    // Venom surge: weapons drip glowing poison.
+    for (const o of v.organelles) {
+      if (o.type !== 'spikes' && o.type !== 'stinger') continue;
+      const d = organelleDirection(o);
+      const tip = memPt(c, organelleAngle(o), 1, 0.3);
+      const q = T(c, tip.x + Math.cos(d) * 0.1, tip.y + Math.sin(d) * 0.1);
+      p.fill(0xc04dff, 0.35 + 0.25 * Math.sin(t * 12));
+      p.circle(q.x, q.y, v.radius * 0.16, true);
+    }
+  }
 
   // Status effects
   if (v.flags & CellFlag.Poisoned) {
@@ -258,17 +271,37 @@ function drawNucleus(c: Ctx, hue: number) {
   c.p.circle(q.x - c.R * 0.06, q.y - c.R * 0.05, c.R * 0.1 * pulse, true);
 }
 
-function drawSpike(c: Ctx, o: Organelle, alpha: number) {
+/** Dark zigzag cracks along a local segment; more of them at higher stages. */
+function drawCracks(c: Ctx, a: Pt, b: Pt, stage: number, alpha: number) {
+  if (stage <= 0) return;
+  c.p.stroke(Math.max(1.6, c.R * 0.045), 0x1a0d08, 0.9 * alpha);
+  const nx = -(b.y - a.y);
+  const ny = b.x - a.x;
+  for (let k = 0; k < stage; k++) {
+    const pts: Pt[] = [];
+    for (let s = 0; s <= 4; s++) {
+      const f = 0.15 + (s / 4) * 0.6 + k * 0.08;
+      const z = (s % 2 ? 1 : -1) * 0.12 * (k % 2 ? -1 : 1);
+      pts.push(T(c, a.x + (b.x - a.x) * f + nx * z, a.y + (b.y - a.y) * f + ny * z));
+    }
+    c.p.poly(pts, false, false);
+  }
+}
+
+function drawSpike(c: Ctx, o: Organelle, alpha: number, stage = 0) {
   const at = organelleAngle(o);
   const dir = organelleDirection(o);
-  const L = TUNING.spikeLength[o.level - 1] ?? 0.35;
+  // Broken spikes are short regrowing stubs.
+  if (stage >= 3) alpha *= 0.5;
+  const L = (TUNING.spikeLength[o.level - 1] ?? 0.35) * (stage >= 3 ? 0.3 : 1);
   const w = 0.12 + 0.02 * o.level;
   const b1 = surfaceBase(c, at - w, -0.04);
   const b2 = surfaceBase(c, at + w, -0.04);
   const base = surfaceBase(c, at);
   const tip = { x: base.x + Math.cos(dir) * L, y: base.y + Math.sin(dir) * L };
   const pts = [T(c, b1.x, b1.y), T(c, tip.x, tip.y), T(c, b2.x, b2.y)];
-  c.p.fill(o.level >= 2 ? 0xffe6c2 : 0xfff6e6, alpha);
+  // Damaged spikes darken toward bruised bone.
+  c.p.fill(stage >= 2 ? 0xc79a78 : stage === 1 ? 0xe8c8a4 : o.level >= 2 ? 0xffe6c2 : 0xfff6e6, alpha);
   c.p.poly(pts, true);
   c.p.stroke(Math.max(1, c.R * 0.03), o.level >= 3 ? 0x7a2a1a : 0x6b5a48, 0.9 * alpha);
   c.p.poly(pts, false);
@@ -286,6 +319,7 @@ function drawSpike(c: Ctx, o: Organelle, alpha: number) {
       c.p.poly(bp, true);
     }
   }
+  if (stage < 3) drawCracks(c, base, tip, stage, alpha);
 }
 
 function venomLinked(organelles: Organelle[], o: Organelle): boolean {
@@ -295,10 +329,11 @@ function venomLinked(organelles: Organelle[], o: Organelle): boolean {
   );
 }
 
-function drawStinger(c: Ctx, o: Organelle, alpha: number) {
+function drawStinger(c: Ctx, o: Organelle, alpha: number, stage = 0) {
   const at = organelleAngle(o);
   const dir = organelleDirection(o);
-  const L = 0.5 + 0.06 * o.level;
+  if (stage >= 3) alpha *= 0.5;
+  const L = (0.5 + 0.06 * o.level) * (stage >= 3 ? 0.3 : 1);
   const base = surfaceBase(c, at);
   const b1 = surfaceBase(c, at - 0.06, -0.03);
   const b2 = surfaceBase(c, at + 0.06, -0.03);
@@ -312,11 +347,24 @@ function drawStinger(c: Ctx, o: Organelle, alpha: number) {
   const tp = T(c, tip.x, tip.y);
   c.p.fill(linked ? 0xc04dff : 0x8a7a99, alpha * (linked ? 0.7 + 0.3 * Math.sin(c.t * 6) : 0.8));
   c.p.circle(tp.x, tp.y, Math.max(1.5, c.R * 0.05), true);
+  if (stage < 3) drawCracks(c, base, tip, stage, alpha);
 }
 
-function drawArmor(c: Ctx, o: Organelle, alpha: number) {
+function drawArmor(c: Ctx, o: Organelle, alpha: number, stage = 0) {
   const at = organelleAngle(o);
   const half = TUNING.membraneHalfArc;
+  if (stage >= 3) {
+    // Shattered: a few loose shards where the plate was.
+    c.p.fill(0xa9c4ea, 0.75 * alpha);
+    for (let k = 0; k < 4; k++) {
+      const th = at - half + ((k + 0.5) / 4) * 2 * half;
+      const a = memPt(c, th - 0.07, 1, 0.02);
+      const b = memPt(c, th + 0.05, 1, 0.07);
+      const d = memPt(c, th + 0.01, 1, -0.02);
+      c.p.poly([T(c, a.x, a.y), T(c, b.x, b.y), T(c, d.x, d.y)], true);
+    }
+    return;
+  }
   const n = 10;
   const outer: Pt[] = [];
   const innerPts: Pt[] = [];
@@ -328,7 +376,8 @@ function drawArmor(c: Ctx, o: Organelle, alpha: number) {
     outer.push(T(c, a.x, a.y));
     innerPts.push(T(c, b.x, b.y));
   }
-  const color = o.level >= 3 ? 0x3e5a7a : o.level === 2 ? 0x5f86b8 : 0x86a9d8;
+  const baseColor = o.level >= 3 ? 0x3e5a7a : o.level === 2 ? 0x5f86b8 : 0x86a9d8;
+  const color = stage >= 2 ? 0x4a4f63 : stage === 1 ? 0x6a7a96 : baseColor;
   c.p.fill(color, 0.9 * alpha);
   c.p.poly([...outer, ...innerPts.reverse()], true);
   c.p.stroke(Math.max(1, c.R * 0.025), 0xd8ecff, 0.7 * alpha);
@@ -340,6 +389,11 @@ function drawArmor(c: Ctx, o: Organelle, alpha: number) {
     const a = memPt(c, th);
     const b = memPt(c, th, 1, thick);
     c.p.poly([T(c, a.x, a.y), T(c, b.x, b.y)], false, false);
+  }
+  // Cracks across the plates
+  for (let k = 0; k < stage; k++) {
+    const th = at + (k ? 0.35 : -0.3) * half;
+    drawCracks(c, memPt(c, th - 0.25, 1, thick * 0.5), memPt(c, th + 0.25, 1, thick * 0.5), 1, alpha);
   }
 }
 

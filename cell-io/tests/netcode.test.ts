@@ -22,7 +22,7 @@ function you(w: World, c: Cell): PrivateState {
   return {
     hp: c.hp, maxHp: c.stats.maxHp, energy: c.energy, energyMax: c.stats.energyMax, xp: 0, xpNext: 30, level: c.level,
     biomass: c.biomass, kills: 0, pendingEvolutions: 0, dashCd: c.dashCd, dashMaxCd: 2.6, toxinCd: 0, hasToxin: false,
-    capacity: 0, capacityUsed: 0, protectedFor: 0, apex: false,
+    capacity: 0, capacityUsed: 0, protectedFor: 0, apex: false, venomCd: 0, venomSurge: 0, hasVenom: false, combatLock: 0,
     x: c.x, y: c.y, vx: c.vx, vy: c.vy, heading: c.heading, ack: c.inputSeq, ackAge: w.time - c.inputAt,
     slow: 0, evolving: false, mutations: { ...c.mutations },
   };

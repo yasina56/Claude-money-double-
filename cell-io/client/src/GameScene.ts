@@ -6,6 +6,7 @@ import { drawCell, hsl, type Painter, type Pt } from './art';
 import type { Sfx } from './audio';
 import type { CellSnap, Net } from './net';
 import { SoftBody } from './softbody';
+import { classifyStrategy, STRATEGY_COLORS } from '../../shared/strategy';
 
 class PhaserPainter implements Painter {
   constructor(public g: Phaser.GameObjects.Graphics) {}
@@ -30,6 +31,9 @@ interface CellView {
   g: Phaser.GameObjects.Graphics;
   painter: PhaserPainter;
   label: Phaser.GameObjects.Text;
+  /** Evolutionary strategy badge (Hunter, Tank, ...), read from the layout. */
+  badge: Phaser.GameObjects.Text;
+  badgeKey: string;
   seed: number;
   jiggle: number;
   x: number;
@@ -129,6 +133,8 @@ export class GameScene extends Phaser.Scene {
   private camPos = { x: 2400, y: 2400 };
   private camZoom = 1;
   inputEnabled = true;
+  /** Called when one of our own organelles breaks (HUD message). */
+  onOwnBreak?: (type: string) => void;
   /** Last world position of our cell (for spectating after death). */
   focus = { x: 2400, y: 2400, r: 22 };
   /** Facing of our own cell, used by the HUD front indicator. */
@@ -293,6 +299,25 @@ export class GameScene extends Phaser.Scene {
           this.burst(ev.x, ev.y, 30, 0xc6ff3d, 180, 5);
           if (Math.hypot(ev.x - this.focus.x, ev.y - this.focus.y) < 900) this.sfx.toxin();
           break;
+        case 'break': {
+          const v = this.views.get(ev.id);
+          this.burst(v?.x ?? ev.x, v?.y ?? ev.y, 22, ev.type === 'membrane' ? 0x86a9d8 : 0xfff1d6, 220, 4);
+          if (v) v.soft.poke(0, 2);
+          if (Math.hypot(ev.x - this.focus.x, ev.y - this.focus.y) < 900) this.sfx.crunch();
+          if (ev.id === this.net.myId) this.onOwnBreak?.(ev.type);
+          break;
+        }
+        case 'regrow': {
+          const v = this.views.get(ev.id);
+          if (v) this.ring(v.x, v.y, v.r * 1.1, 0x8dffb5);
+          break;
+        }
+        case 'venom': {
+          const v = this.views.get(ev.id);
+          if (v) this.burst(v.x, v.y, 26, 0xc04dff, 160, 4);
+          if (ev.id === this.net.myId) this.sfx.toxin();
+          break;
+        }
       }
     }
   }
@@ -370,7 +395,10 @@ export class GameScene extends Phaser.Scene {
         const label = this.add
           .text(0, 0, '', { fontFamily: 'system-ui, sans-serif', fontSize: '14px', fontStyle: '800', color: '#ffffff', stroke: '#00222a', strokeThickness: 4 })
           .setOrigin(0.5, 0);
-        v = { g, painter: new PhaserPainter(g), label, seed: (id * 2.39996) % TAU, jiggle: 0, x: s.x, y: s.y, r: s.radius, heading: s.heading, missing: 0, labelKey: '', soft: new SoftBody(), mvx: 0, mvy: 0, max: 0, may: 0, omega: 0, alpha: 0 };
+        const badge = this.add
+          .text(0, 0, '', { fontFamily: 'system-ui, sans-serif', fontSize: '11px', fontStyle: '900', color: '#ffffff', stroke: '#00222a', strokeThickness: 3 })
+          .setOrigin(0.5, 0);
+        v = { g, painter: new PhaserPainter(g), label, badge, badgeKey: '', seed: (id * 2.39996) % TAU, jiggle: 0, x: s.x, y: s.y, r: s.radius, heading: s.heading, missing: 0, labelKey: '', soft: new SoftBody(), mvx: 0, mvy: 0, max: 0, may: 0, omega: 0, alpha: 0 };
         this.views.set(id, v);
       }
       v.missing = 0;
@@ -393,7 +421,7 @@ export class GameScene extends Phaser.Scene {
       const detail = screenR > 60 ? 44 : screenR > 25 ? 32 : 20;
       drawCell(
         v.painter,
-        { x: s.x, y: s.y, radius: s.radius, heading: s.heading, hue: info?.hue ?? 180, organelles: info?.organelles ?? [], flags: s.flags, vx: s.vx, vy: s.vy, seed: v.seed, jiggle: v.jiggle * 0.3, soft: v.soft },
+        { x: s.x, y: s.y, radius: s.radius, heading: s.heading, hue: info?.hue ?? 180, organelles: info?.organelles ?? [], flags: s.flags, vx: s.vx, vy: s.vy, seed: v.seed, jiggle: v.jiggle * 0.3, soft: v.soft, cracks: info?.cracks },
         t,
         detail,
       );
@@ -423,7 +451,16 @@ export class GameScene extends Phaser.Scene {
         v.label.setText(info ? `${info.name}  ·  ${info.level}` : '');
         v.label.setColor(mine ? '#ffe27a' : info?.ai ? '#bfe9f0' : '#ffffff');
       }
-      v.label.setPosition(s.x, s.y + s.radius * 1.25 + 4 / zoom).setScale(Math.max(0.6, Math.min(2.2, 1 / zoom))).setDepth(25);
+      const labelScale = Math.max(0.6, Math.min(2.2, 1 / zoom));
+      v.label.setPosition(s.x, s.y + s.radius * 1.25 + 4 / zoom).setScale(labelScale).setDepth(25);
+      const bkey = info ? info.organelles.map((o) => `${o.type}${o.level}${o.slot}${o.tilt}`).join() : '';
+      if (bkey !== v.badgeKey) {
+        v.badgeKey = bkey;
+        const strat = info ? classifyStrategy(info.organelles) : null;
+        v.badge.setText(strat ? strat.toUpperCase() : '');
+        if (strat) v.badge.setColor(STRATEGY_COLORS[strat]);
+      }
+      v.badge.setPosition(s.x, v.label.y + 17 * labelScale).setScale(labelScale).setDepth(25);
     }
     for (const [id, v] of this.views) {
       if (cells.has(id)) continue;
@@ -477,6 +514,7 @@ export class GameScene extends Phaser.Scene {
     if (!v) return;
     v.g.destroy();
     v.label.destroy();
+    v.badge.destroy();
     this.views.delete(id);
   }
 

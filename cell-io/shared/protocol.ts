@@ -11,6 +11,7 @@ export const CellFlag = {
   Regenerating: 32,
   Slowed: 64,
   Bleeding: 128,
+  VenomSurge: 256,
 } as const;
 
 /** Flat cell record in snapshots: [id, x, y, heading, radius, hpFrac, flags, vx, vy]. */
@@ -37,6 +38,8 @@ export interface CellInfo {
   level: number;
   ai: boolean;
   organelles: Organelle[];
+  /** Per-organelle crack stage: 0 intact, 1-2 cracked, 3 broken (regrowing). */
+  cracks: number[];
   version: number;
 }
 
@@ -55,6 +58,11 @@ export interface PrivateState {
   dashMaxCd: number;
   toxinCd: number;
   hasToxin: boolean;
+  venomCd: number;
+  venomSurge: number;
+  hasVenom: boolean;
+  /** Seconds until you are out of combat long enough to evolve (0 = free to evolve). */
+  combatLock: number;
   capacity: number;
   capacityUsed: number;
   protectedFor: number;
@@ -93,6 +101,9 @@ export type GameEvent =
   | { e: 'level'; id: number; level: number }
   | { e: 'dash'; id: number }
   | { e: 'toxin'; id: number; x: number; y: number }
+  | { e: 'break'; id: number; x: number; y: number; type: string }
+  | { e: 'regrow'; id: number; type: string }
+  | { e: 'venom'; id: number }
   | { e: 'kill'; killer: string; victim: string };
 
 export interface EvolutionOffer {
@@ -135,7 +146,7 @@ export interface ClientToServer {
   /** Steering intent. `seq` increases with every message and is echoed back as `ack`. */
   input: (data: { a: number; t: number; seq: number }) => void;
   view: (data: { w: number; h: number }) => void;
-  ability: (data: { key: 'dash' | 'toxin' }) => void;
+  ability: (data: { key: 'dash' | 'toxin' | 'venom' }) => void;
   evolveOpen: () => void;
   evolveClose: () => void;
   evolveChoose: (data: EvolveChoice) => void;

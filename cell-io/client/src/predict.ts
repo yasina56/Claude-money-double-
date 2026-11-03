@@ -53,11 +53,12 @@ export class Predictor {
   }
 
   /** Stats come from biomass, level, layout and mutations; recompute only when those change. */
-  setStats(you: PrivateState, organelles: Organelle[]) {
-    const key = `${you.biomass}|${you.level}|${you.mutations.vitality}|${you.mutations.metabolism}|${organelles.map((o) => `${o.type}${o.level}:${o.slot}:${o.tilt}`).join(',')}`;
+  setStats(you: PrivateState, organelles: Organelle[], cracks: readonly number[] = []) {
+    const key = `${you.biomass}|${you.level}|${you.mutations.vitality}|${you.mutations.metabolism}|${organelles.map((o) => `${o.type}${o.level}:${o.slot}:${o.tilt}`).join(',')}|${cracks.join('')}`;
     if (key !== this.statsKey) {
       this.statsKey = key;
-      this.stats = computeStats(you.biomass, you.level, organelles, you.mutations);
+      // Broken organelles (crack stage 3) contribute nothing, exactly as on the server.
+      this.stats = computeStats(you.biomass, you.level, organelles, you.mutations, cracks.map((c) => c >= 3));
     }
     this.mods = { slow: you.slow, evolving: you.evolving };
     this.level = you.level;

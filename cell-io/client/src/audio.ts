@@ -96,6 +96,11 @@ export class Sfx {
     this.noise(0.5, 0.6, 1200);
     this.tone(300, 0.6, 'triangle', 0.2, 50);
   }
+  /** Organelle breaking: a dry crunch. */
+  crunch() {
+    this.noise(0.12, 0.6, 3200);
+    this.tone(160, 0.1, 'square', 0.12, 50);
+  }
   attach() {
     this.tone(420, 0.08, 'square', 0.12, 640);
     this.tone(840, 0.2, 'sine', 0.15, 1100, 0.05);

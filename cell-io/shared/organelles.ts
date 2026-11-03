@@ -149,7 +149,7 @@ export const ORGANELLES: Record<OrganelleType, OrganelleDef> = {
     color: 0xb04dff,
     levelNames: ['Venom Sac', 'Paralytic Venom', 'Necrotic Venom'],
     levelText: [
-      'Spikes/stingers on its side poison targets: 3 dmg/s per stack (max 3)',
+      'Spikes/stingers on its side poison targets: 3 dmg/s per stack (max 3). [R] Venom surge',
       '4.5 dmg/s per stack, slows poisoned enemies 15%',
       '6 dmg/s per stack, slows poisoned enemies 25%',
     ],
@@ -231,6 +231,10 @@ export const TUNING = {
   venomMaxStacks: 3,
   venomCost: 5,
   venomLinkArc: (70 * Math.PI) / 180,
+  /** Venom sac active ability: next N seconds of linked hits inject double poison. */
+  venomSurgeCost: 25,
+  venomSurgeCooldown: 10,
+  venomSurgeDuration: 3,
   regenFrac: [0.008, 0.012, 0.017],
   regenEnergyPerSec: 1.4,
   flagThrust: [0.35, 0.45, 0.55],

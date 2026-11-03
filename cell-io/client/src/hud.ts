@@ -20,6 +20,7 @@ export class Hud {
   private toastEl = $('#toast');
   private dashBtn = $('#ab-dash');
   private toxinBtn = $('#ab-toxin');
+  private venomBtn = $('#ab-venom');
   private evoBtn = $('#ab-evolve');
   private minimap = $<HTMLCanvasElement>('#minimap');
   private lastLb = 0;
@@ -63,6 +64,9 @@ export class Hud {
     setCooldown(this.dashBtn, you.dashCd / you.dashMaxCd, you.energy >= 28);
     this.toxinBtn.classList.toggle('disabled', !you.hasToxin);
     if (you.hasToxin) setCooldown(this.toxinBtn, you.toxinCd / 9, you.energy >= 35);
+    this.venomBtn.classList.toggle('disabled', !you.hasVenom);
+    if (you.hasVenom) setCooldown(this.venomBtn, you.venomCd / 10, you.energy >= 25);
+    this.venomBtn.classList.toggle('pending', you.venomSurge > 0);
     const badge = this.evoBtn.querySelector('.badge') as HTMLElement;
     badge.classList.toggle('hidden', you.pendingEvolutions <= 0);
     badge.textContent = String(you.pendingEvolutions);

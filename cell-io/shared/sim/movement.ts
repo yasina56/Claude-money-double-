@@ -86,10 +86,40 @@ export function integrateMovement(b: Body, s: CellStats, raw: MoveInput, mods: M
   }
 }
 
-/** Dash impulse vector for a body. Validation (energy, cooldown) happens in World. */
+/**
+ * Net propulsion vector in the cell's local frame: the directional part of
+ * every cilia/flagellum thrust component. A rear flagellum points forward, a
+ * side flagellum points sideways, an even ring of cilia cancels out.
+ */
+export function propulsionVector(s: CellStats): { x: number; y: number; mag: number } {
+  let x = 0;
+  let y = 0;
+  for (const t of s.thrust) {
+    const w = t.amount * (1 - t.isotropic);
+    x += Math.cos(t.dir) * w;
+    y += Math.sin(t.dir) * w;
+  }
+  return { x, y, mag: Math.hypot(x, y) };
+}
+
+/** Below this much net propulsion the dash follows your steering instead. */
+export const DASH_PROPULSION_MIN = 0.1;
+
+/**
+ * Dash impulse vector. With a meaningful propulsion layout the dash fires
+ * along it (relative to your heading), and stronger propulsion dashes harder;
+ * without one it follows the steering direction. Validation (energy,
+ * cooldown) happens in World.
+ */
 export function dashImpulse(b: Body, s: CellStats, input: MoveInput, level: number): { x: number; y: number } {
   const { a, t } = sanitizeInput(input);
-  const dir = t > 0.05 ? a : b.heading;
-  const impulse = DASH_IMPULSE * (level >= APEX_LEVEL ? 1.25 : 1) * s.weightMult * Math.pow(22 / s.radius, 0.2);
+  const p = propulsionVector(s);
+  let dir: number;
+  let boost = 1;
+  if (p.mag >= DASH_PROPULSION_MIN) {
+    dir = b.heading + Math.atan2(p.y, p.x);
+    boost = 1 + 0.5 * Math.min(1, p.mag / 0.5);
+  } else dir = t > 0.05 ? a : b.heading;
+  const impulse = DASH_IMPULSE * boost * (level >= APEX_LEVEL ? 1.25 : 1) * s.weightMult * Math.pow(22 / s.radius, 0.2);
   return { x: Math.cos(dir) * impulse, y: Math.sin(dir) * impulse };
 }

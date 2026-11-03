@@ -15,9 +15,9 @@ import {
 import { capacityForLevel, capacityUsed } from '../shared/placement';
 import { APEX_LEVEL, xpToNext } from '../shared/progression';
 import { CellFlag, type CellInfo, type ClientToServer, type GameEvent, type LeaderboardEntry, type PrivateState, type ServerToClient, type Snapshot } from '../shared/protocol';
-import { DASH_COOLDOWN } from '../shared/constants';
+import { DASH_COOLDOWN, EVOLVE_COMBAT_LOCK } from '../shared/constants';
 import { AI_POPULATION, spawnAI, updateAI, type Archetype } from '../shared/sim/ai';
-import type { Cell } from '../shared/sim/cell';
+import { crackStages, type Cell } from '../shared/sim/cell';
 import { World } from '../shared/sim/world';
 
 type GameSocket = Socket<ClientToServer, ServerToClient>;
@@ -136,6 +136,7 @@ export class Room {
       if (!c) return;
       if (d?.key === 'dash') this.world.dash(c);
       else if (d?.key === 'toxin') this.world.toxin(c);
+      else if (d?.key === 'venom') this.world.venom(c);
     });
     socket.on('netPing', (t) => {
       if (Number.isFinite(Number(t))) socket.emit('netPong', Number(t));
@@ -251,7 +252,7 @@ export class Room {
       cells.push(c.id, round1(c.x), round1(c.y), round2(c.heading), round1(c.stats.radius), round2(c.hp / c.stats.maxHp), flagsOf(c), Math.round(c.vx), Math.round(c.vy));
       if (client.known.get(c.id) !== c.infoVersion) {
         client.known.set(c.id, c.infoVersion);
-        infos.push({ id: c.id, name: c.name, hue: c.hue, level: c.level, ai: c.kind === 'ai', organelles: c.organelles.map((o) => ({ ...o })), version: c.infoVersion });
+        infos.push({ id: c.id, name: c.name, hue: c.hue, level: c.level, ai: c.kind === 'ai', organelles: c.organelles.map((o) => ({ ...o })), cracks: crackStages(c), version: c.infoVersion });
       }
     }
     if (client.known.size > 400) {
@@ -287,6 +288,8 @@ export class Room {
           return true;
         case 'level':
         case 'dash':
+        case 'regrow':
+        case 'venom':
         case 'eat': {
           const c = this.world.cells.get(ev.id);
           return ev.id === client.cellId || (c ? inView(c.x, c.y) : false);
@@ -325,6 +328,10 @@ function privateState(c: Cell, now: number): PrivateState {
     dashMaxCd: c.level >= APEX_LEVEL ? DASH_COOLDOWN * 0.7 : DASH_COOLDOWN,
     toxinCd: round2(c.toxinCd),
     hasToxin: c.stats.toxins.length > 0,
+    venomCd: round2(c.venomCd),
+    venomSurge: round2(c.venomSurge),
+    hasVenom: c.stats.deliveries.some((d) => d.venom),
+    combatLock: round2(Math.max(0, EVOLVE_COMBAT_LOCK - (now - c.lastCombatAt))),
     capacity: capacityForLevel(c.level),
     capacityUsed: capacityUsed(c.organelles),
     protectedFor: round2(Math.max(c.spawnProtect, c.evolveProtect)),
@@ -342,6 +349,7 @@ function flagsOf(c: Cell): number {
   if (c.regenActive) f |= CellFlag.Regenerating;
   if (c.poison.time > 0 && c.poison.slow > 0) f |= CellFlag.Slowed;
   if (c.bleed.time > 0) f |= CellFlag.Bleeding;
+  if (c.venomSurge > 0) f |= CellFlag.VenomSurge;
   return f;
 }
 

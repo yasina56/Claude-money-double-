@@ -26,7 +26,7 @@ new Phaser.Game({
 
 type Screen = 'menu' | 'playing' | 'dead';
 let screen: Screen = 'menu';
-let lastPending = 0;
+let lastQueuedToast = 0;
 
 const menu = $('#menu');
 const death = $('#death');
@@ -64,13 +64,11 @@ $('#join-form').addEventListener('submit', (e) => {
     /* ignore */
   }
   net.join(name);
-  lastPending = 0;
   setScreen('playing');
 });
 
 $('#again-btn').onclick = () => {
   net.socket.emit('respawn');
-  lastPending = 0;
   setScreen('playing');
 };
 
@@ -99,7 +97,7 @@ net.onDied = (d) => {
   setTimeout(() => setScreen('dead'), 900);
 };
 
-function ability(key: 'dash' | 'toxin') {
+function ability(key: 'dash' | 'toxin' | 'venom') {
   if (screen !== 'playing' || evo.isOpen) return;
   if (key === 'dash') net.predictor.predictDash(net.you);
   net.socket.emit('ability', { key });
@@ -129,11 +127,18 @@ function updateNetDebug(now: number) {
   ].join('<br>');
 }
 function openEvolution() {
-  if (screen === 'playing' && net.you && net.you.pendingEvolutions > 0) evo.request();
+  if (screen !== 'playing' || !net.you || net.you.pendingEvolutions <= 0) return;
+  if (net.you.combatLock > 0) {
+    hud.toast('Evolution queued<br><small>Get out of combat to evolve</small>', 1200);
+    return;
+  }
+  evo.request();
 }
 
 $('#ab-dash').onclick = () => ability('dash');
 $('#ab-toxin').onclick = () => ability('toxin');
+$('#ab-venom').onclick = () => ability('venom');
+scene.onOwnBreak = (type) => hud.toast(`Your ${type === 'membrane' ? 'membrane' : type} broke!<br><small>It regrows in 12 s</small>`, 1500);
 $('#ab-evolve').onclick = () => openEvolution();
 const muteBtn = $('#mute-btn');
 const toggleMute = () => {
@@ -154,7 +159,11 @@ window.addEventListener('keydown', (e) => {
       e.preventDefault();
       break;
     case 'KeyQ':
-      ability('toxin');
+      // Q fires the toxin cloud, or the venom surge if you have no toxin gland.
+      ability(net.you && !net.you.hasToxin && net.you.hasVenom ? 'venom' : 'toxin');
+      break;
+    case 'KeyR':
+      ability('venom');
       break;
     case 'KeyE':
       openEvolution();
@@ -183,9 +192,14 @@ function frame() {
   if (screen === 'playing') {
     hud.update(now);
     const pending = net.you?.pendingEvolutions ?? 0;
-    // Auto-open the evolution screen when a new evolution becomes available.
-    if (pending > 0 && !evo.isOpen && !evo.dismissed && pending >= lastPending) openEvolution();
-    lastPending = pending;
+    // Auto-open the evolution screen when a new evolution becomes available,
+    // but only once you have been out of combat for a moment (server enforces this too).
+    const locked = (net.you?.combatLock ?? 0) > 0;
+    if (pending > 0 && !evo.isOpen && !evo.dismissed && locked && now - lastQueuedToast > 2500) {
+      lastQueuedToast = now;
+      hud.toast('Evolution queued<br><small>Get out of combat to evolve</small>', 1200);
+    }
+    if (pending > 0 && !evo.isOpen && !evo.dismissed && !locked) openEvolution();
   }
   scene.inputEnabled = !evo.isOpen;
   requestAnimationFrame(frame);

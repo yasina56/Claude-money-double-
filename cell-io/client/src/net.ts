@@ -141,7 +141,8 @@ export class Net {
     if (s.infos) for (const info of s.infos) this.infos.set(info.id, info);
     this.you = s.you;
     if (s.you) {
-      this.predictor.setStats(s.you, this.infos.get(this.myId)?.organelles ?? []);
+      const mine = this.infos.get(this.myId);
+      this.predictor.setStats(s.you, mine?.organelles ?? [], mine?.cracks ?? []);
       this.predictor.reconcile(s.you, this.hazards);
     }
     const st = this.stats;
