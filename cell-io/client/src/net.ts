@@ -79,8 +79,9 @@ export class Net {
   /** Called with nutrient ids that disappeared since the last nutrient update. */
   onNutrientsRemoved: (ids: number[]) => void = () => {};
 
-  constructor() {
-    this.socket = io({ transports: ['websocket', 'polling'] });
+  /** Pass a socket-like object to run against an in-browser server (offline build). */
+  constructor(socket?: Socket<ServerToClient, ClientToServer>) {
+    this.socket = socket ?? io({ transports: ['websocket', 'polling'] });
     this.socket.on('connect', () => {
       this.connected = true;
       this.onConnection(true);

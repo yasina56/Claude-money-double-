@@ -7,7 +7,9 @@ import { Net } from './net';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
-const net = new Net();
+// VITE_OFFLINE=1 builds run the authoritative server inside the page (single player, no backend).
+const localSocket = import.meta.env.VITE_OFFLINE === '1' ? (await import('./offline')).createLocalSocket() : undefined;
+const net = new Net(localSocket);
 const sfx = new Sfx();
 const scene = new GameScene(net, sfx);
 const hud = new Hud(net);

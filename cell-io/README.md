@@ -23,6 +23,12 @@ npm run build        # bundles the client into dist/client
 npm start            # serves dist/client and the game on http://localhost:3001 (PORT env to change)
 ```
 
+Single-player static build (no backend: the real server code runs inside the page):
+
+```bash
+npm run build:offline   # dist/offline, host anywhere as static files
+```
+
 Checks:
 
 ```bash

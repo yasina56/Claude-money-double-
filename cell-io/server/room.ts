@@ -146,7 +146,7 @@ export class Room {
       socket.emit('evolveResult', err ? { ok: false, error: err } : { ok: true });
       if (!err && c.offers) socket.emit('evolveOffer', { offers: c.offers, protectedFor: c.evolveProtect });
     });
-    if (process.env.CELLIO_DEV === '1') {
+    if (typeof process !== 'undefined' && process.env?.CELLIO_DEV === '1') {
       socket.on('devXp', (amount) => {
         const c = cellOf();
         if (c) this.world.addXp(c, Math.max(0, Math.min(5000, Number(amount) || 0)));
