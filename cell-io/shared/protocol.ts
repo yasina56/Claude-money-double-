@@ -59,12 +59,28 @@ export interface PrivateState {
   capacityUsed: number;
   protectedFor: number;
   apex: boolean;
+  /** Exact authoritative body for client-side prediction / reconciliation. */
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  heading: number;
+  /** Sequence number of the last input the server applied, and how long ago (s) it was applied. */
+  ack: number;
+  ackAge: number;
+  /** Movement modifiers the predictor must apply. */
+  slow: number;
+  evolving: boolean;
+  mutations: { vitality: number; metabolism: number };
 }
 
 export interface Snapshot {
   t: number; // server time (ms)
   cells: number[];
-  nutrients?: number[];
+  /** Nutrient deltas: records entering the view, ids leaving it. `nFull` means start from an empty set. */
+  nAdd?: number[];
+  nDel?: number[];
+  nFull?: boolean;
   clouds: number[];
   you: PrivateState | null;
   infos?: CellInfo[];
@@ -116,13 +132,16 @@ export interface EvolveChoice {
 
 export interface ClientToServer {
   join: (data: { name: string }) => void;
-  input: (data: { a: number; t: number }) => void;
+  /** Steering intent. `seq` increases with every message and is echoed back as `ack`. */
+  input: (data: { a: number; t: number; seq: number }) => void;
   view: (data: { w: number; h: number }) => void;
   ability: (data: { key: 'dash' | 'toxin' }) => void;
   evolveOpen: () => void;
   evolveClose: () => void;
   evolveChoose: (data: EvolveChoice) => void;
   respawn: () => void;
+  /** Latency probe; the server echoes `t` back in `netPong`. */
+  netPing: (t: number) => void;
   /** Development only (server started with CELLIO_DEV=1): grant XP. */
   devXp: (amount: number) => void;
   /** Development only: teleport next to the nearest other player. */
@@ -137,4 +156,5 @@ export interface ServerToClient {
   evolveOffer: (o: EvolutionOffer) => void;
   evolveResult: (r: { ok: boolean; error?: string }) => void;
   died: (d: DeathStats) => void;
+  netPong: (t: number) => void;
 }

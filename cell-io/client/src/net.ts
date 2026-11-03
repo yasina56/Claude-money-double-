@@ -17,6 +17,7 @@ import type {
   Snapshot,
 } from '../../shared/protocol';
 import { lerp, lerpAngle } from '../../shared/math';
+import { Predictor } from './predict';
 
 export interface CellSnap {
   id: number;
@@ -69,6 +70,9 @@ export class Net {
 
   private buffer: BufferedSnap[] = [];
   private offset: number | null = null; // serverTime - localTime
+  readonly predictor = new Predictor();
+  /** Network stats for the F3 overlay. */
+  readonly stats = { ping: 0, snapRate: 0, bufferMs: 0, nutrientRecords: 0, snapTimes: [] as number[] };
 
   onEvents: (e: GameEvent[]) => void = () => {};
   onOffer: (o: EvolutionOffer) => void = () => {};
@@ -95,6 +99,7 @@ export class Net {
       this.worldSize = w.worldSize;
       this.hazards = w.hazards;
       this.buffer = [];
+      this.predictor.reset();
       this.onWelcome();
     });
     this.socket.on('snap', (s) => this.ingest(s));
@@ -104,8 +109,16 @@ export class Net {
     this.socket.on('evolveResult', (r) => this.onEvolveResult(r));
     this.socket.on('died', (d) => {
       this.you = null;
+      this.predictor.reset();
       this.onDied(d);
     });
+    this.socket.on('netPong', (t) => {
+      const rtt = performance.now() - t;
+      this.stats.ping = this.stats.ping ? this.stats.ping * 0.7 + rtt * 0.3 : rtt;
+    });
+    setInterval(() => {
+      if (this.connected) this.socket.emit('netPing', performance.now());
+    }, 1000);
   }
 
   private ingest(s: Snapshot) {
@@ -127,18 +140,30 @@ export class Net {
 
     if (s.infos) for (const info of s.infos) this.infos.set(info.id, info);
     this.you = s.you;
-
-    if (s.nutrients) {
-      const next = new Map<number, NutrientState>();
-      const n = s.nutrients;
-      for (let i = 0; i + NUTRIENT_FIELDS <= n.length; i += NUTRIENT_FIELDS) {
-        next.set(n[i], { id: n[i], x: n[i + 1], y: n[i + 2], kind: n[i + 3] });
-      }
-      const removed: number[] = [];
-      for (const id of this.nutrients.keys()) if (!next.has(id)) removed.push(id);
-      this.nutrients = next;
-      if (removed.length) this.onNutrientsRemoved(removed);
+    if (s.you) {
+      this.predictor.setStats(s.you, this.infos.get(this.myId)?.organelles ?? []);
+      this.predictor.reconcile(s.you, this.hazards);
     }
+    const st = this.stats;
+    st.snapTimes.push(now);
+    while (st.snapTimes.length && now - st.snapTimes[0] > 1000) st.snapTimes.shift();
+    st.snapRate = st.snapTimes.length;
+
+    // Nutrient deltas.
+    const removed: number[] = [];
+    if (s.nFull) {
+      removed.push(...this.nutrients.keys());
+      this.nutrients.clear();
+    }
+    const add = s.nAdd ?? [];
+    for (let i = 0; i + NUTRIENT_FIELDS <= add.length; i += NUTRIENT_FIELDS) {
+      this.nutrients.set(add[i], { id: add[i], x: add[i + 1], y: add[i + 2], kind: add[i + 3] });
+    }
+    for (const id of s.nDel ?? []) {
+      if (this.nutrients.delete(id)) removed.push(id);
+    }
+    st.nutrientRecords += add.length / NUTRIENT_FIELDS + (s.nDel?.length ?? 0);
+    if (removed.length) this.onNutrientsRemoved(removed.filter((id) => !this.nutrients.has(id)));
 
     const clouds: CloudState[] = [];
     const c = s.clouds;
@@ -151,6 +176,7 @@ export class Net {
     const out = new Map<number, CellSnap>();
     if (!this.buffer.length || this.offset === null) return out;
     const rt = now + this.offset - INTERP_DELAY;
+    this.stats.bufferMs = this.buffer[this.buffer.length - 1].t - rt;
     let older = this.buffer[0];
     let newer = this.buffer[this.buffer.length - 1];
     for (let i = this.buffer.length - 1; i > 0; i--) {
@@ -183,8 +209,10 @@ export class Net {
   join(name: string) {
     this.socket.emit('join', { name });
   }
+  /** Send steering intent; the predictor records it under a fresh sequence number. */
   sendInput(a: number, t: number) {
-    this.socket.emit('input', { a, t });
+    const seq = this.predictor.pushInput(a, t);
+    this.socket.emit('input', { a, t, seq });
   }
   sendView(w: number, h: number) {
     this.socket.emit('view', { w, h });

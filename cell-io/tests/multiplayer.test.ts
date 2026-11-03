@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { Server } from 'socket.io';
 import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ClientToServer, ServerToClient, Snapshot, Welcome } from '../shared/protocol';
+import { NUTRIENT_FIELDS, type ClientToServer, type ServerToClient, type Snapshot, type Welcome } from '../shared/protocol';
 import { RoomManager, sanitizeName } from '../server/room';
 
 let url = '';
@@ -56,7 +56,7 @@ describe('multiplayer room', () => {
     expect(Array.isArray(lb)).toBe(true);
 
     // Input is applied server side.
-    a.s.emit('input', { a: 0, t: 1 });
+    a.s.emit('input', { a: 0, t: 1, seq: 1 });
     // Evolving without a pending level is rejected.
     a.s.emit('evolveChoose', { index: 0, slot: 0, tilt: 0 });
     const res = await next<{ ok: boolean }>(a.s, 'evolveResult');
@@ -66,6 +66,32 @@ describe('multiplayer room', () => {
     expect([...room.world.cells.values()].some((c) => c.name === 'Betascript')).toBe(true);
     a.s.close();
     b.s.close();
+  }, 10000);
+
+  it('ignores stale input sequence numbers and reconstructs nutrients from deltas', async () => {
+    const a = client('Delta');
+    const wa = await a.welcome;
+    const known = new Set<number>();
+    let acks = 0;
+    a.s.on('snap', (sn: Snapshot) => {
+      if (sn.nFull) known.clear();
+      const add = sn.nAdd ?? [];
+      for (let i = 0; i + NUTRIENT_FIELDS <= add.length; i += NUTRIENT_FIELDS) known.add(add[i]);
+      for (const id of sn.nDel ?? []) known.delete(id);
+      if (sn.you) acks = sn.you.ack;
+    });
+    a.s.emit('input', { a: 1, t: 1, seq: 5 });
+    a.s.emit('input', { a: 2, t: 1, seq: 3 }); // older: must be ignored
+    await new Promise((r) => setTimeout(r, 700));
+    const room = rooms.all.find((r) => r.world.cells.has(wa.id))!;
+    const cell = room.world.cells.get(wa.id)!;
+    expect(cell.input.a).toBe(1);
+    expect(acks).toBe(5);
+    // The client's delta-built set equals what the server believes the client has.
+    const server = [...room.clients.values()].find((c) => c.cellId === wa.id)!;
+    expect(known.size).toBeGreaterThan(10);
+    expect([...known].sort()).toEqual([...server.knownNutrients].sort());
+    a.s.close();
   }, 10000);
 
   it('sanitizes names', () => {

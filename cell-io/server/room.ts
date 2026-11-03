@@ -16,19 +16,22 @@ import { capacityForLevel, capacityUsed } from '../shared/placement';
 import { APEX_LEVEL, xpToNext } from '../shared/progression';
 import { CellFlag, type CellInfo, type ClientToServer, type GameEvent, type LeaderboardEntry, type PrivateState, type ServerToClient, type Snapshot } from '../shared/protocol';
 import { DASH_COOLDOWN } from '../shared/constants';
-import { AI_POPULATION, spawnAI, updateAI, type Archetype } from './ai';
-import type { Cell } from './cell';
-import { World } from './world';
+import { AI_POPULATION, spawnAI, updateAI, type Archetype } from '../shared/sim/ai';
+import type { Cell } from '../shared/sim/cell';
+import { World } from '../shared/sim/world';
 
 type GameSocket = Socket<ClientToServer, ServerToClient>;
 
-interface Client {
+export interface Client {
   socket: GameSocket;
   name: string;
   cellId: number | null;
   view: { w: number; h: number };
   lastPos: { x: number; y: number };
   known: Map<number, number>; // cell id -> info version the client has
+  /** Nutrient ids this client currently has, for delta updates. */
+  knownNutrients: Set<number>;
+  nutrientsFull: boolean;
   inputCount: number;
   inputWindowStart: number;
 }
@@ -85,6 +88,8 @@ export class Room {
       view: { w: 1280, h: 720 },
       lastPos: { x: this.world.size / 2, y: this.world.size / 2 },
       known: new Map(),
+      knownNutrients: new Set(),
+      nutrientsFull: true,
       inputCount: 0,
       inputWindowStart: 0,
     };
@@ -115,15 +120,25 @@ export class Room {
       if (!c) return;
       const a = Number(inp?.a);
       const t = Number(inp?.t);
+      const seq = Number(inp?.seq);
       if (!Number.isFinite(a) || !Number.isFinite(t)) return;
+      // Sequence numbers only move forward; stale or replayed packets are ignored.
+      if (Number.isInteger(seq) && seq > 0) {
+        if (seq <= c.inputSeq) return;
+        c.inputSeq = seq;
+      }
       c.input.a = a;
       c.input.t = Math.max(0, Math.min(1, t));
+      c.inputAt = this.world.time;
     });
     socket.on('ability', (d) => {
       const c = cellOf();
       if (!c) return;
       if (d?.key === 'dash') this.world.dash(c);
       else if (d?.key === 'toxin') this.world.toxin(c);
+    });
+    socket.on('netPing', (t) => {
+      if (Number.isFinite(Number(t))) socket.emit('netPong', Number(t));
     });
     socket.on('evolveOpen', () => {
       const c = cellOf();
@@ -175,6 +190,8 @@ export class Room {
     const c = this.world.addCell('player', client.name);
     client.cellId = c.id;
     client.known.clear();
+    client.knownNutrients.clear();
+    client.nutrientsFull = true;
     client.socket.emit('welcome', { id: c.id, worldSize: this.world.size, hazards: this.world.hazards, roomId: this.id });
   }
 
@@ -241,14 +258,23 @@ export class Room {
       for (const id of client.known.keys()) if (!this.world.cells.has(id)) client.known.delete(id);
     }
 
-    const snap: Snapshot = { t: Math.round(this.world.time * 1000), cells, clouds: [], you: me ? privateState(me) : null };
+    const snap: Snapshot = { t: Math.round(this.world.time * 1000), cells, clouds: [], you: me ? privateState(me, this.world.time) : null };
     if (infos.length) snap.infos = infos;
-    if (this.tick % NUTRIENT_EVERY === 0) {
-      const nut: number[] = [];
+    if (this.tick % NUTRIENT_EVERY === 0 || client.nutrientsFull) {
+      // Delta-encode nutrients: send only records entering the view and ids leaving it.
+      const visible = new Set<number>();
+      const add: number[] = [];
       this.world.nutrientGrid.query(cx - hw, cy - hh, cx + hw, cy + hh, (n) => {
-        nut.push(n.id, Math.round(n.x), Math.round(n.y), n.kind);
+        visible.add(n.id);
+        if (!client.knownNutrients.has(n.id)) add.push(n.id, Math.round(n.x), Math.round(n.y), n.kind);
       });
-      snap.nutrients = nut;
+      const del: number[] = [];
+      for (const id of client.knownNutrients) if (!visible.has(id)) del.push(id);
+      client.knownNutrients = visible;
+      if (client.nutrientsFull) snap.nFull = true;
+      client.nutrientsFull = false;
+      if (add.length) snap.nAdd = add;
+      if (del.length) snap.nDel = del;
     }
     for (const cl of this.world.clouds) {
       if (inView(cl.x, cl.y, cl.r)) snap.clouds.push(cl.id, Math.round(cl.x), Math.round(cl.y), Math.round(cl.r), round2(cl.life / cl.maxLife));
@@ -273,8 +299,18 @@ export class Room {
   }
 }
 
-function privateState(c: Cell): PrivateState {
+function privateState(c: Cell, now: number): PrivateState {
   return {
+    x: Math.round(c.x * 100) / 100,
+    y: Math.round(c.y * 100) / 100,
+    vx: Math.round(c.vx * 100) / 100,
+    vy: Math.round(c.vy * 100) / 100,
+    heading: Math.round(c.heading * 10000) / 10000,
+    ack: c.inputSeq,
+    ackAge: Math.round((now - c.inputAt) * 1000) / 1000,
+    slow: c.poison.time > 0 ? c.poison.slow : 0,
+    evolving: c.evolving,
+    mutations: { ...c.mutations },
     hp: Math.round(c.hp * 10) / 10,
     maxHp: Math.round(c.stats.maxHp),
     energy: Math.round(c.energy * 10) / 10,

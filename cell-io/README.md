@@ -23,18 +23,20 @@ npm run build        # bundles the client into dist/client
 npm start            # serves dist/client and the game on http://localhost:3001 (PORT env to change)
 ```
 
-Single-player static build (no backend: the real server code runs inside the page):
+Solo static build (no backend: the shared simulation and a local Room run inside the page):
 
 ```bash
-npm run build:offline   # dist/offline, host anywhere as static files
+npm run build:solo   # dist/solo, host anywhere as static files (build:offline is an alias)
 ```
 
 Checks:
 
 ```bash
-npm run typecheck    # tsc --noEmit over client, server, shared and tests
-npm test             # vitest: mechanics + a two-client Socket.IO integration test
-npm run check        # both
+npm run typecheck    # tsc --noEmit over client, server, shared, tests and scripts
+npm test             # vitest: mechanics, netcode, soft body, Socket.IO integration
+npm run smoke        # boots the real server, connects 4 clients, steers, evolves, checks acks/deltas/health
+npm run check        # all three
+npm run bench -- 40 60          # per-tick cost with 40 players + bots for 60 simulated seconds
 npx tsx scripts/simulate.ts 7   # headless balance probe: bot progression timings
 ```
 
@@ -49,6 +51,7 @@ Dev cheats: start the server with `CELLIO_DEV=1` and, in the browser console, ru
 | Q | Toxin cloud (needs a Toxin Gland) |
 | E | Open the evolution screen when an evolution is pending |
 | M | Mute |
+| F3 | Network debug overlay: ping, snapshot rate, interpolation buffer, prediction error, nutrient delta rate |
 | Evolution screen | Click a card or press **1-4**. Drag or click on the cell to attach. **Wheel / Q / E** tilts surface organelles. **Enter** confirms, **Esc** goes back / closes. |
 
 Touch works through the same pointer path: touch and hold to steer, and the ability buttons are tappable.
@@ -130,7 +133,7 @@ AI cells use exactly the same movement, combat and evolution code as players, in
 
 ```
 cell-io/
-  shared/            pure game rules used by both sides
+  shared/            all game rules; used by the server, the solo build and the client predictor
     constants.ts     world size, tick rates, tuning, radius and camera-zoom formulas
     organelles.ts    organelle catalogue + per-level tuning numbers
     placement.ts     normalized attachment slots, validation, capacity
@@ -138,35 +141,49 @@ cell-io/
     progression.ts   XP curve, unlock tiers, evolution offer generation
     protocol.ts      Socket.IO event types and compact snapshot layout
     math.ts          angles, soft caps, seeded RNG
-  server/
-    index.ts         HTTP static server + Socket.IO bootstrap
-    room.ts          Room (fixed 40 Hz loop, per-client area-of-interest snapshots at 20 Hz, input validation) and RoomManager (matchmaking)
-    world.ts         authoritative simulation: movement, nutrients, collisions, directional combat, DoT, hazards, evolution, deaths
-    ai.ts            AI archetypes, behaviour and auto-evolution
-    cell.ts          Cell entity + stat refresh
-    spatial.ts       uniform grid for nutrient queries
+    sim/world.ts     authoritative simulation: nutrients, collisions, directional combat, DoT, hazards, evolution, deaths
+    sim/movement.ts  movement + dash integration, shared by World and the client predictor
+    sim/ai.ts        AI archetypes, behaviour and auto-evolution
+    sim/cell.ts      Cell entity + stat refresh
+    sim/spatial.ts   uniform grid (nutrients; cells rebuilt every tick)
+  server/            networking only
+    index.ts         HTTP static server + /health + Socket.IO bootstrap
+    room.ts          Room (40 Hz loop, per-client area-of-interest snapshots at 20 Hz, input + seq validation, nutrient deltas) and RoomManager (matchmaking)
   client/
     index.html, style.css   menu, HUD, evolution screen, death screen (DOM)
     src/main.ts      wiring: Phaser game, screens, keyboard, auto-open evolution
-    src/net.ts       socket client, snapshot buffer and interpolation
+    src/net.ts       socket client, snapshot buffer, interpolation, nutrient deltas, network stats
+    src/predict.ts   client-side prediction and reconciliation for your own cell
+    src/solo.ts      in-memory socket pair that runs a Room in the page (solo build)
+    src/softbody.ts  spring-ring membrane that reacts to turning, acceleration and hits
     src/GameScene.ts Phaser scenes: parallax background, world, cells, nutrients, hazards, clouds, particles, camera, input
     src/art.ts       procedural cell/organelle renderer behind a Painter interface (Phaser Graphics or Canvas 2D)
     src/evolutionUI.ts  offer cards + drag-and-drop placement editor with live stat preview
     src/hud.ts       bars, organelle chips, abilities, leaderboard, kill feed, minimap
     src/audio.ts     WebAudio synthesized sound effects
   tests/             vitest suites
-  scripts/simulate.ts  headless balance probe
+  scripts/           smoke.ts (end-to-end server check), bench.ts (tick cost), simulate.ts (pacing probe)
 ```
 
 **Networking model**
 * Clients send only intent: an input angle and throttle (rate-limited), ability presses and evolution choices. The server owns positions, health, collisions, damage, nutrients and upgrades, so speed hacks and impossible placements have nothing to exploit.
-* Snapshots are flat number arrays for every cell in the client's view: position, heading, radius, HP fraction, status flags, velocity. Cell layouts (`CellInfo`) are sent only when a cell first appears or its organelles change. Visible nutrients are resent at 10 Hz.
-* The client renders other cells ~110 ms in the past and interpolates between snapshots. Your own cell is extrapolated from the newest snapshot and smoothed, for responsiveness.
+* Snapshots are flat number arrays for every cell in the client's view: position, heading, radius, HP fraction, status flags, velocity. Cell layouts (`CellInfo`) are sent only when a cell first appears or its organelles change.
+* **Nutrient deltas.** The server remembers which nutrients each client has. At 10 Hz it sends only records entering the view (`nAdd`: id, x, y, kind) and ids leaving it or eaten (`nDel`). `nFull` resets the set after a (re)spawn. A test checks that the client's rebuilt set equals the server's record. In a browser session this was about 20-60 records/s instead of roughly 1,200-1,800/s (120-180 visible nutrients resent 10 times a second).
+* **Client-side prediction.** Every `input` carries an increasing `seq`, and the server ignores stale or replayed ones. Your private state returns your exact body, the last applied `ack` and `ackAge` (how long that input has been running on the server). The client steps your cell every frame with the same `shared/sim/movement.ts` code the server uses, including a predicted dash. On each snapshot it rewinds to the server body, replays the unacknowledged inputs (plus the unapplied tail of the acked one) and turns any mismatch into an offset that fades over ~120 ms. Mismatches larger than 160 px snap. Collisions are not predicted, so bumps arrive as smooth corrections. Tests cover exact agreement with zero latency, small corrections at 75 ms one-way latency, and dash replay.
+* Other cells are rendered ~110 ms in the past and interpolated between snapshots.
+* **Spatial grid.** `World` rebuilds a 240 px cell grid every tick. Collisions, toxin clouds and AI perception query it (`cellsNear`) instead of scanning every cell; nutrients already had their own grid. `npm run bench` (one process, simulated time):
+
+  | Cells in room | Before (O(n²)) avg / p99 | After (grid) avg / p99 |
+  |---|---|---|
+  | ~62 (40 players + bots) | 0.27 / 1.01 ms | 0.27 / 1.10 ms |
+  | ~171 (150 players + bots) | 1.14 / 3.62 ms | 0.98 / 3.86 ms |
+  | ~414 (400 players + bots) | 4.23 / 11.8 ms | 2.46 / 10.5 ms |
+
+  The tick budget is 25 ms. At the 40-player cap the cost is dominated by movement, nutrient pickup and AI, not pair checks. The grid pays off as rooms grow.
 * `RoomManager.assign()` is the single place that picks a room (up to 40 humans each), so matchmaking, regions or private rooms can be added there.
 
 ## Known limitations and next steps
-* **No client-side prediction** for your own cell beyond velocity extrapolation. Full prediction plus reconciliation can reuse `shared/stats.ts`, since the movement formula is deterministic.
-* Cell-cell collision is O(n²) per room. That is fine for ~70 cells; move cells into `SpatialGrid` for bigger rooms.
+* Prediction covers movement and dash, not collisions or currents' interaction with other cells; those reconcile smoothly.
 * JSON over Socket.IO. A binary encoding of the flat arrays would cut bandwidth further.
 * Internal organelles are never damaged individually. A natural next step is organelle HP, so hits on a side can disable what is mounted there.
 * Balance numbers live in `shared/organelles.ts` (`TUNING`) and `shared/constants.ts`; `scripts/simulate.ts` helps check pacing after changes.

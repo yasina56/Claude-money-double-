@@ -12,9 +12,7 @@ import {
   CRYSTAL_XP,
   DASH_COOLDOWN,
   DASH_COST,
-  DASH_IMPULSE,
   EVOLVE_PROTECTION,
-  EVOLVE_SLOW,
   KILL_CREDIT_WINDOW,
   MAX_BIOMASS,
   MAX_HIT_FRACTION,
@@ -23,14 +21,15 @@ import {
   PAIR_HIT_COOLDOWN,
   SPAWN_PROTECTION,
   WORLD_SIZE,
-} from '../shared/constants';
-import { angleDiff, clamp, mulberry32, TAU } from '../shared/math';
-import { ORGANELLES, TUNING } from '../shared/organelles';
-import { capacityForLevel, checkPlacement, MAX_TILT, TILT_STEP } from '../shared/placement';
-import { APEX_LEVEL, generateOffers, maxOrganelleLevel, MAX_LEVEL, xpToNext } from '../shared/progression';
-import type { DeathStats, EvolveChoice, GameEvent, Hazard } from '../shared/protocol';
-import { armorMultiplier, deliveryAt, thrustMultiplier } from '../shared/stats';
+} from '../constants';
+import { angleDiff, clamp, mulberry32, TAU } from '../math';
+import { ORGANELLES, TUNING } from '../organelles';
+import { capacityForLevel, checkPlacement, MAX_TILT, TILT_STEP } from '../placement';
+import { APEX_LEVEL, generateOffers, maxOrganelleLevel, MAX_LEVEL, xpToNext } from '../progression';
+import type { DeathStats, EvolveChoice, GameEvent, Hazard } from '../protocol';
+import { armorMultiplier, deliveryAt } from '../stats';
 import { createCell, refreshStats, type Cell } from './cell';
+import { dashImpulse, integrateMovement } from './movement';
 import { SpatialGrid } from './spatial';
 
 export interface Nutrient {
@@ -66,6 +65,9 @@ export class World {
   cells = new Map<number, Cell>();
   nutrients = new Map<number, Nutrient>();
   nutrientGrid = new SpatialGrid<Nutrient>(WORLD_SIZE, 120);
+  /** Rebuilt every tick: cells by position, for collisions, clouds and AI perception. */
+  cellGrid = new SpatialGrid<Cell>(WORLD_SIZE, 240);
+  private maxRadius = 0;
   clouds: Cloud[] = [];
   hazards: Hazard[] = [];
   events: GameEvent[] = [];
@@ -199,10 +201,9 @@ export class World {
   dash(c: Cell) {
     if (!c.alive || c.dashCd > 0 || c.energy < DASH_COST) return false;
     const apex = c.level >= APEX_LEVEL;
-    const dir = c.input.t > 0.05 ? c.input.a : c.heading;
-    const impulse = DASH_IMPULSE * (apex ? 1.25 : 1) * c.stats.weightMult * Math.pow(22 / c.stats.radius, 0.2);
-    c.vx += Math.cos(dir) * impulse;
-    c.vy += Math.sin(dir) * impulse;
+    const imp = dashImpulse(c, c.stats, c.input, c.level);
+    c.vx += imp.x;
+    c.vy += imp.y;
     c.energy -= DASH_COST;
     c.dashCd = DASH_COOLDOWN * (apex ? 0.7 : 1);
     c.dashTime = 0.45;
@@ -308,6 +309,7 @@ export class World {
   step(dt: number) {
     this.time += dt;
     for (const c of this.cells.values()) if (c.alive) this.updateCell(c, dt);
+    this.rebuildCellGrid();
     this.collectNutrients();
     this.resolveCollisions();
     this.updateClouds(dt);
@@ -325,54 +327,12 @@ export class World {
     c.evolveProtect = Math.max(0, c.evolveProtect - dt);
     c.energy = Math.min(s.energyMax, c.energy + s.energyRegen * dt);
 
-    // --- movement: thrust depends on direction relative to heading and organelle layout
-    const a = Number.isFinite(c.input.a) ? c.input.a : 0;
-    const t = clamp(Number.isFinite(c.input.t) ? c.input.t : 0, 0, 1);
-    const local = angleDiff(c.heading, a);
-    const facing = 0.7 + 0.3 * Math.max(0, Math.cos(local));
-    let speedMult = thrustMultiplier(s, local) * facing;
-    if (c.poison.time > 0) speedMult *= 1 - c.poison.slow;
-    if (c.evolving) speedMult *= EVOLVE_SLOW;
-    const target = s.baseSpeed * speedMult * t;
-    const tvx = Math.cos(a) * target;
-    const tvy = Math.sin(a) * target;
-    let dvx = tvx - c.vx;
-    let dvy = tvy - c.vy;
-    const dv = Math.hypot(dvx, dvy);
-    const maxDv = s.accel * dt;
-    if (dv > maxDv) {
-      dvx *= maxDv / dv;
-      dvy *= maxDv / dv;
-    }
-    c.vx += dvx;
-    c.vy += dvy;
-
-    let px = 0;
-    let py = 0;
+    // --- movement (shared with the client predictor) + acid pools
+    integrateMovement(c, s, c.input, { slow: c.poison.time > 0 ? c.poison.slow : 0, evolving: c.evolving }, this.hazards, dt);
     for (const h of this.hazards) {
-      const d = Math.hypot(c.x - h.x, c.y - h.y);
-      if (d > h.r + s.radius * 0.5) continue;
-      if (h.kind === 'current') {
-        const k = 1 - d / (h.r + s.radius * 0.5);
-        const strength = (h.strength ?? 0) * k * Math.pow(22 / s.radius, 0.3);
-        px += Math.cos(h.dir ?? 0) * strength;
-        py += Math.sin(h.dir ?? 0) * strength;
-      } else if (h.kind === 'acid' && d < h.r) {
+      if (h.kind === 'acid' && Math.hypot(c.x - h.x, c.y - h.y) < h.r) {
         this.damage(c, (5 + c.stats.maxHp * 0.012) * dt, null, 'acid', c.x, c.y, false);
       }
-    }
-
-    c.x = clamp(c.x + (c.vx + px) * dt, s.radius * 0.5, this.size - s.radius * 0.5);
-    c.y = clamp(c.y + (c.vy + py) * dt, s.radius * 0.5, this.size - s.radius * 0.5);
-    if (c.x <= s.radius * 0.5 || c.x >= this.size - s.radius * 0.5) c.vx *= -0.3;
-    if (c.y <= s.radius * 0.5 || c.y >= this.size - s.radius * 0.5) c.vy *= -0.3;
-
-    if (t > 0.05) {
-      const turn = angleDiff(c.heading, a);
-      const maxTurn = s.turnRate * dt;
-      c.heading += clamp(turn, -maxTurn, maxTurn);
-      if (c.heading > Math.PI) c.heading -= TAU;
-      else if (c.heading < -Math.PI) c.heading += TAU;
     }
 
     // --- damage over time (capped stacks; refreshes rather than stacking forever)
@@ -443,12 +403,38 @@ export class World {
     }
   }
 
+  rebuildCellGrid() {
+    this.cellGrid.clear();
+    this.maxRadius = 0;
+    for (const c of this.cells.values()) {
+      if (!c.alive) continue;
+      this.cellGrid.insert(c);
+      if (c.stats.radius > this.maxRadius) this.maxRadius = c.stats.radius;
+    }
+  }
+
+  /**
+   * Visit every live cell whose body may lie within `range` of (x, y).
+   * Uses the per-tick grid; callers still do their own exact distance test.
+   */
+  cellsNear(x: number, y: number, range: number, fn: (c: Cell) => void) {
+    const r = range + this.maxRadius;
+    this.cellGrid.query(x - r, y - r, x + r, y + r, (c) => {
+      if (c.alive) fn(c);
+    });
+  }
+
   private resolveCollisions() {
-    const list = [...this.cells.values()].filter((c) => c.alive);
-    for (let i = 0; i < list.length; i++) {
-      const A = list[i];
-      for (let j = i + 1; j < list.length; j++) {
-        const B = list[j];
+    const near: Cell[] = [];
+    for (const A of this.cells.values()) {
+      if (!A.alive) continue;
+      near.length = 0;
+      this.cellsNear(A.x, A.y, A.stats.radius, (B) => {
+        // Each pair once, lower id first (ids increase with creation order).
+        if (B.id > A.id) near.push(B);
+      });
+      near.sort((p, q) => p.id - q.id);
+      for (const B of near) {
         const rs = A.stats.radius + B.stats.radius;
         const dx = B.x - A.x;
         const dy = B.y - A.y;
@@ -553,11 +539,11 @@ export class World {
   private updateClouds(dt: number) {
     for (const cl of this.clouds) {
       cl.life -= dt;
-      for (const c of this.cells.values()) {
-        if (!c.alive || c.id === cl.owner) continue;
+      this.cellsNear(cl.x, cl.y, cl.r, (c) => {
+        if (c.id === cl.owner) return;
         const d = Math.hypot(c.x - cl.x, c.y - cl.y);
         if (d < cl.r + c.stats.radius * 0.6) this.damage(c, cl.dps * dt, cl.owner, 'toxin', c.x, c.y, false);
-      }
+      });
     }
     this.clouds = this.clouds.filter((c) => c.life > 0);
   }

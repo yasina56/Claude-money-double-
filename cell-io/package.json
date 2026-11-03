@@ -9,11 +9,14 @@
     "dev:server": "tsx watch server/index.ts",
     "dev:client": "vite",
     "build": "vite build",
-    "build:offline": "VITE_OFFLINE=1 vite build",
+    "build:solo": "VITE_SOLO=1 vite build",
+    "build:offline": "npm run build:solo",
+    "smoke": "tsx scripts/smoke.ts",
+    "bench": "tsx scripts/bench.ts",
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test && npm run smoke"
   },
   "dependencies": {
     "phaser": "^3.80.1",

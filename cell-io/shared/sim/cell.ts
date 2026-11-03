@@ -1,7 +1,7 @@
-import { START_BIOMASS } from '../shared/constants';
-import type { Organelle } from '../shared/organelles';
-import type { Offer } from '../shared/progression';
-import { computeStats, type CellStats, type Mutations } from '../shared/stats';
+import { START_BIOMASS } from '../constants';
+import type { Organelle } from '../organelles';
+import type { Offer } from '../progression';
+import { computeStats, type CellStats, type Mutations } from '../stats';
 import type { AIState } from './ai';
 
 export interface Cell {
@@ -29,6 +29,9 @@ export interface Cell {
   infoVersion: number;
 
   input: { a: number; t: number };
+  /** Last input sequence applied and the world time it arrived (for prediction acks). */
+  inputSeq: number;
+  inputAt: number;
   dashCd: number;
   dashTime: number;
   toxinCd: number;
@@ -83,6 +86,8 @@ export function createCell(id: number, kind: Cell['kind'], name: string, x: numb
     stats,
     infoVersion: 1,
     input: { a: 0, t: 0 },
+    inputSeq: 0,
+    inputAt: now,
     dashCd: 0,
     dashTime: 0,
     toxinCd: 0,

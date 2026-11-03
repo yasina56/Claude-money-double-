@@ -1,7 +1,7 @@
 /** Headless balance probe: a greedy grazer bot plays in a full world; prints progression timings. */
-import { World } from '../server/world';
-import { spawnAI, updateAI, AI_POPULATION, type Archetype } from '../server/ai';
-import { autoEvolve } from '../server/ai';
+import { World } from '../shared/sim/world';
+import { spawnAI, updateAI, AI_POPULATION, type Archetype } from '../shared/sim/ai';
+import { autoEvolve } from '../shared/sim/ai';
 
 const world = new World({ seed: Number(process.argv[2] ?? 7) });
 for (const [arch, n] of Object.entries(AI_POPULATION) as [Archetype, number][]) for (let i = 0; i < n; i++) spawnAI(world, arch);

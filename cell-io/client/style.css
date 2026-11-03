@@ -80,6 +80,8 @@ button.ghost { background: transparent; }
 @keyframes pulse { to { box-shadow: 0 0 4px rgba(255,212,94,0.2); } }
 .badge { position: absolute; top: 3px; right: 5px; background: var(--accent-2); color: #3a2a00; border-radius: 99px; font-size: 11px; font-weight: 900; padding: 0 6px; }
 #minimap { position: absolute; right: 12px; bottom: 12px; border-radius: 12px; background: rgba(4,20,26,0.7); border: 1px solid var(--panel-border); }
+#netdbg { position: absolute; left: 12px; top: 230px; font: 12px/1.55 ui-monospace, Menlo, Consolas, monospace; background: rgba(0,0,0,0.6); padding: 8px 10px; border-radius: 8px; color: #cfeef4; }
+#netdbg b { color: var(--accent-2); font-weight: 700; }
 #toast { position: absolute; left: 50%; top: 18%; transform: translateX(-50%); font-size: 26px; font-weight: 900; color: var(--accent-2); text-shadow: 0 2px 12px rgba(0,0,0,0.7); opacity: 0; transition: opacity .3s; text-align: center; }
 #toast.show { opacity: 1; }
 .icon-btn { position: absolute; left: 12px; bottom: 12px; pointer-events: auto; background: var(--panel); font-size: 18px; padding: 6px 10px; }

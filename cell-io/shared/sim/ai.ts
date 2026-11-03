@@ -3,10 +3,10 @@
  * evolution rules as players; the controller only writes `cell.input` and
  * calls the same ability / evolution entry points.
  */
-import { angleDiff, clamp, TAU } from '../shared/math';
-import { ORGANELLES, type OrganelleType } from '../shared/organelles';
-import { nearestValidSlot } from '../shared/placement';
-import { xpToNext, type Offer } from '../shared/progression';
+import { angleDiff, clamp, TAU } from '../math';
+import { ORGANELLES, type OrganelleType } from '../organelles';
+import { nearestValidSlot } from '../placement';
+import { xpToNext, type Offer } from '../progression';
 import type { Cell } from './cell';
 import type { World } from './world';
 
@@ -158,8 +158,11 @@ export function updateAI(world: World, c: Cell, dt: number) {
   let prey: Cell | null = null;
   let preyScore = -Infinity;
 
-  for (const o of world.cells.values()) {
-    if (o === c || !o.alive) continue;
+  const nearby: Cell[] = [];
+  world.cellsNear(c.x, c.y, sense, (o) => {
+    if (o !== c) nearby.push(o);
+  });
+  for (const o of nearby) {
     const dx = o.x - c.x;
     const dy = o.y - c.y;
     const d = Math.hypot(dx, dy);
@@ -255,8 +258,8 @@ export function updateAI(world: World, c: Cell, dt: number) {
     throttle = ai.archetype === 'defender' ? 0.55 : 0.8;
     // Defenders lash out at anything hugging them.
     if (ai.archetype === 'defender') {
-      for (const o of world.cells.values()) {
-        if (o !== c && o.alive && Math.hypot(o.x - c.x, o.y - c.y) < R + o.stats.radius + 50) {
+      for (const o of nearby) {
+        if (Math.hypot(o.x - c.x, o.y - c.y) < R + o.stats.radius + 50) {
           world.toxin(c);
           break;
         }

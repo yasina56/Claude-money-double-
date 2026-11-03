@@ -29,6 +29,10 @@ export class SpatialGrid<T extends Positioned> {
     b.add(item);
   }
 
+  clear() {
+    for (const b of this.buckets.values()) b.clear();
+  }
+
   remove(item: T) {
     this.buckets.get(this.key(item.x, item.y))?.delete(item);
   }

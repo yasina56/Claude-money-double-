@@ -7,8 +7,8 @@ import { Net } from './net';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
-// VITE_OFFLINE=1 builds run the authoritative server inside the page (single player, no backend).
-const localSocket = import.meta.env.VITE_OFFLINE === '1' ? (await import('./offline')).createLocalSocket() : undefined;
+// VITE_SOLO=1 builds run the authoritative server inside the page (single player, no backend).
+const localSocket = import.meta.env.VITE_SOLO === '1' ? (await import('./solo')).createLocalSocket() : undefined;
 const net = new Net(localSocket);
 const sfx = new Sfx();
 const scene = new GameScene(net, sfx);
@@ -100,7 +100,33 @@ net.onDied = (d) => {
 };
 
 function ability(key: 'dash' | 'toxin') {
-  if (screen === 'playing' && !evo.isOpen) net.socket.emit('ability', { key });
+  if (screen !== 'playing' || evo.isOpen) return;
+  if (key === 'dash') net.predictor.predictDash(net.you);
+  net.socket.emit('ability', { key });
+}
+
+// F3: network debug overlay.
+const netdbg = $('#netdbg');
+let netdbgOn = false;
+let lastNutrientRecords = 0;
+let lastDbg = 0;
+function updateNetDebug(now: number) {
+  if (!netdbgOn || now - lastDbg < 250) return;
+  const dtS = (now - lastDbg) / 1000;
+  lastDbg = now;
+  const st = net.stats;
+  const p = net.predictor;
+  const nps = (st.nutrientRecords - lastNutrientRecords) / dtS;
+  lastNutrientRecords = st.nutrientRecords;
+  netdbg.innerHTML = [
+    `ping <b>${st.ping.toFixed(0)} ms</b>`,
+    `snapshots <b>${st.snapRate}/s</b>`,
+    `interp buffer <b>${st.bufferMs.toFixed(0)} ms</b>`,
+    `prediction error <b>${p.lastError.toFixed(1)} px</b> (avg ${p.errorAvg.toFixed(1)})`,
+    `corrections <b>${p.corrections}</b>`,
+    `nutrient deltas <b>${nps.toFixed(0)} rec/s</b> (${net.nutrients.size} known)`,
+    `cells in view <b>${net.latestCells.size}</b>`,
+  ].join('<br>');
 }
 function openEvolution() {
   if (screen === 'playing' && net.you && net.you.pendingEvolutions > 0) evo.request();
@@ -136,6 +162,11 @@ window.addEventListener('keydown', (e) => {
     case 'KeyM':
       toggleMute();
       break;
+    case 'F3':
+      netdbgOn = !netdbgOn;
+      netdbg.classList.toggle('hidden', !netdbgOn);
+      e.preventDefault();
+      break;
     case 'Enter':
       if (screen === 'dead') $('#again-btn').click();
       break;
@@ -148,6 +179,7 @@ window.addEventListener('keydown', (e) => {
 
 function frame() {
   const now = performance.now();
+  updateNetDebug(now);
   if (screen === 'playing') {
     hud.update(now);
     const pending = net.you?.pendingEvolutions ?? 0;

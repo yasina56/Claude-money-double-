@@ -5,9 +5,9 @@ import { capacityForLevel, checkPlacement, organelleLocalPos, SURFACE_SLOTS, val
 import { generateOffers, xpToNext } from '../shared/progression';
 import { armorMultiplier, computeStats, statSummary, thrustMultiplier } from '../shared/stats';
 import { mulberry32 } from '../shared/math';
-import { World } from '../server/world';
-import type { Cell } from '../server/cell';
-import { refreshStats } from '../server/cell';
+import { World } from '../shared/sim/world';
+import type { Cell } from '../shared/sim/cell';
+import { refreshStats } from '../shared/sim/cell';
 
 const FRONT = 0;
 const REAR = SURFACE_SLOTS / 2;

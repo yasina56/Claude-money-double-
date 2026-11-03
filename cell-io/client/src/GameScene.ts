@@ -128,7 +128,6 @@ export class GameScene extends Phaser.Scene {
   private lastInputSent = 0;
   private camPos = { x: 2400, y: 2400 };
   private camZoom = 1;
-  private ownSmooth: { x: number; y: number } | null = null;
   inputEnabled = true;
   /** Last world position of our cell (for spectating after death). */
   focus = { x: 2400, y: 2400, r: 22 };
@@ -344,17 +343,14 @@ export class GameScene extends Phaser.Scene {
     }
 
     const cells = this.net.sample(now);
-    // Our own cell: extrapolate from the newest snapshot for responsiveness.
+    // Our own cell: client-side prediction (shared movement code + reconciliation).
     const ownLatest = this.net.latestCells.get(this.net.myId);
-    if (ownLatest && this.net.you) {
-      const ahead = Math.min(0.12, (now - this.net.latestArrival) / 1000);
-      const tx = ownLatest.x + ownLatest.vx * ahead;
-      const ty = ownLatest.y + ownLatest.vy * ahead;
-      if (!this.ownSmooth || Math.hypot(tx - this.ownSmooth.x, ty - this.ownSmooth.y) > 200) this.ownSmooth = { x: tx, y: ty };
-      this.ownSmooth.x = lerp(this.ownSmooth.x, tx, 0.4);
-      this.ownSmooth.y = lerp(this.ownSmooth.y, ty, 0.4);
-      cells.set(this.net.myId, { ...ownLatest, x: this.ownSmooth.x, y: this.ownSmooth.y });
-    } else this.ownSmooth = null;
+    const pred = this.net.predictor;
+    if (ownLatest && this.net.you && pred.body) {
+      pred.tick(Math.min(0.1, deltaMs / 1000), this.net.hazards);
+      const r = pred.render();
+      cells.set(this.net.myId, { ...ownLatest, x: r.x, y: r.y, vx: r.vx, vy: r.vy, heading: r.heading });
+    }
 
     this.syncCells(cells, dt, t);
     this.syncNutrients(t);
