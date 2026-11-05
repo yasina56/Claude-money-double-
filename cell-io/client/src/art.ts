@@ -141,9 +141,13 @@ export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
   const rim = hsl(hue, 85, 74);
   const inner = hsl(hue, 70, 70);
 
+  // Level of detail: very few membrane points means a tiny on-screen cell; skip the decoration.
+  const lowDetail = detail <= 12;
   // Soft glow
-  p.fill(rim, 0.07);
-  p.circle(v.x, v.y, v.radius * 1.22, true);
+  if (!lowDetail) {
+    p.fill(rim, 0.07);
+    p.circle(v.x, v.y, v.radius * 1.22, true);
+  }
 
   // Back-layer appendages
   v.organelles.forEach((o, i) => {
@@ -168,7 +172,7 @@ export function drawCell(p: Painter, v: CellVisual, t: number, detail = 36) {
 
   // Cytoplasm specks
   p.fill(0xffffff, 0.22);
-  for (let k = 0; k < 6; k++) {
+  for (let k = 0; k < (lowDetail ? 0 : 6); k++) {
     const a = v.seed * 3 + k * 1.7 + t * 0.15 * (k % 2 ? 1 : -1);
     const r = 0.25 + ((k * 37) % 50) / 100;
     const sp = slosh(c, Math.cos(a) * r, Math.sin(a) * r);

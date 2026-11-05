@@ -6,6 +6,8 @@ import { drawCell, hsl, type Painter, type Pt } from './art';
 import type { Sfx } from './audio';
 import type { CellSnap, Net } from './net';
 import { SoftBody } from './softbody';
+import type { Joystick } from './joystick';
+import { settings } from './settings';
 import { classifyStrategy, STRATEGY_COLORS } from '../../shared/strategy';
 
 class PhaserPainter implements Painter {
@@ -63,6 +65,9 @@ interface Particle {
   size: number;
   drag: number;
 }
+
+/** Touch-first devices (phones, tablets) get a lighter quality tier automatically. */
+const COARSE_POINTER = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
 const NUTRIENT_COLORS = [0x7dffb2, 0xffe36b, 0xff8ad8, 0x8ad8ff, 0xffa86b];
 const HIT_COLORS: Record<string, number> = { spike: 0xffffff, sting: 0xd08bff, bump: 0xb8d4dc, dot: 0x9dff3d, toxin: 0xc6ff3d, acid: 0xc6ff3d };
@@ -133,6 +138,10 @@ export class GameScene extends Phaser.Scene {
   private camPos = { x: 2400, y: 2400 };
   private camZoom = 1;
   inputEnabled = true;
+  /** Touch joystick (when present and held, it steers instead of the pointer). */
+  joystick: Joystick | null = null;
+  /** After death: follow this cell (your killer) for a few seconds. */
+  spectateId: number | null = null;
   /** Called when one of our own organelles breaks (HUD message). */
   onOwnBreak?: (type: string) => void;
   /** Last world position of our cell (for spectating after death). */
@@ -253,8 +262,11 @@ export class GameScene extends Phaser.Scene {
           if (ev.amount >= 1) this.damageNumber(ev.x, ev.y, ev.amount, mine ? 0xff6b81 : byMe ? 0xfff1a8 : ev.kind === 'dot' ? 0xb6ff5a : 0xd8e8ec, ev.blocked, mine || byMe);
           if (mine && ev.kind !== 'dot') {
             this.sfx.hurt();
-            this.cameras.main.shake(120, Math.min(0.012, 0.003 + ev.amount / 3000));
-          } else if (byMe) this.sfx.hit(ev.amount > 12);
+            if (!settings.reduceEffects) this.cameras.main.shake(120, Math.min(0.012, 0.003 + ev.amount / 3000));
+          } else if (byMe) {
+            if (ev.kind === 'spike') this.sfx.spikeHit(ev.amount > 12);
+            else this.sfx.hit(ev.amount > 12);
+          }
           break;
         }
         case 'death': {
@@ -292,7 +304,11 @@ export class GameScene extends Phaser.Scene {
             this.burst(v.x - Math.cos(v.heading) * v.r, v.y - Math.sin(v.heading) * v.r, 14, 0xc9fbff, 120, 3);
             v.jiggle = Math.min(1, v.jiggle + 0.3);
           }
-          if (ev.id === this.net.myId) this.sfx.dash();
+          if (ev.id === this.net.myId) {
+            // The dash sounds like your propulsion: flagellum whoosh, cilia flutter.
+            const orgs = this.net.infos.get(this.net.myId)?.organelles ?? [];
+            this.sfx.dashFor(orgs.some((o) => o.type === 'flagellum') ? 'flagellum' : orgs.some((o) => o.type === 'cilia') ? 'cilia' : 'plain');
+          }
           break;
         }
         case 'toxin':
@@ -322,14 +338,25 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Particle budget: smaller when zoomed out or with reduce-effects on. */
+  private get particleBudget() {
+    const z = this.cameras.main.zoom;
+    return settings.reduceEffects ? 250 : z < 0.6 || COARSE_POINTER ? 600 : 1500;
+  }
+
   private burst(x: number, y: number, n: number, color: number, speed: number, size: number) {
+    if (settings.reduceEffects || this.cameras.main.zoom < 0.6) n = Math.ceil(n * 0.4);
+    // Skip effects that are off-screen entirely.
+    const v = this.cameras.main.worldView;
+    if (x < v.x - 200 || x > v.right + 200 || y < v.y - 200 || y > v.bottom + 200) return;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * TAU;
       const s = speed * (0.3 + Math.random() * 0.7);
       const life = 0.4 + Math.random() * 0.5;
       this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, color, size: size * (0.5 + Math.random()), drag: 3 });
     }
-    if (this.particles.length > 1500) this.particles.splice(0, this.particles.length - 1500);
+    const budget = this.particleBudget;
+    if (this.particles.length > budget) this.particles.splice(0, this.particles.length - budget);
   }
 
   private ring(x: number, y: number, r: number, color: number) {
@@ -402,7 +429,8 @@ export class GameScene extends Phaser.Scene {
         this.views.set(id, v);
       }
       v.missing = 0;
-      this.driveSoftBody(v, s, dt);
+      // Level of detail: tiny on-screen cells skip the soft-body simulation.
+      if (s.radius * this.cameras.main.zoom > 9) this.driveSoftBody(v, s, dt);
       v.x = s.x;
       v.y = s.y;
       v.r = s.radius;
@@ -413,12 +441,23 @@ export class GameScene extends Phaser.Scene {
       if (mine) {
         this.focus = { x: s.x, y: s.y, r: s.radius };
         this.ownHeading = s.heading;
+      } else if (id === this.spectateId && !this.net.you) {
+        this.focus = { x: s.x, y: s.y, r: Math.max(30, s.radius) };
       }
       const g = v.g;
       g.clear();
+      // Off-screen cells (snapshots include a margin around the view) build no geometry.
+      const view = this.cameras.main.worldView;
+      const m = s.radius * 2.2;
+      const onScreen = s.x + m > view.x && s.x - m < view.right && s.y + m > view.y && s.y - m < view.bottom;
+      v.label.setVisible(onScreen);
+      v.badge.setVisible(onScreen);
+      if (!onScreen) continue;
       g.setDepth(5 + s.radius / 1000 + (mine ? 0.0001 : 0));
       const screenR = s.radius * zoom;
-      const detail = screenR > 60 ? 44 : screenR > 25 ? 32 : 20;
+      // Membrane points by on-screen size; touch devices use one tier lower.
+      const tiers = COARSE_POINTER ? [36, 24, 16, 10] : [44, 32, 20, 12];
+      const detail = screenR > 60 ? tiers[0] : screenR > 25 ? tiers[1] : screenR > 10 ? tiers[2] : tiers[3];
       drawCell(
         v.painter,
         { x: s.x, y: s.y, radius: s.radius, heading: s.heading, hue: info?.hue ?? 180, organelles: info?.organelles ?? [], flags: s.flags, vx: s.vx, vy: s.vy, seed: v.seed, jiggle: v.jiggle * 0.3, soft: v.soft, cracks: info?.cracks },
@@ -452,7 +491,8 @@ export class GameScene extends Phaser.Scene {
         v.label.setColor(mine ? '#ffe27a' : info?.ai ? '#bfe9f0' : '#ffffff');
       }
       const labelScale = Math.max(0.6, Math.min(2.2, 1 / zoom));
-      v.label.setPosition(s.x, s.y + s.radius * 1.25 + 4 / zoom).setScale(labelScale).setDepth(25);
+      v.label.setPosition(s.x, s.y + s.radius * 1.25 + 4 / zoom).setScale(labelScale).setDepth(25).setVisible(settings.showNames || mine);
+
       const bkey = info ? info.organelles.map((o) => `${o.type}${o.level}${o.slot}${o.tilt}`).join() : '';
       if (bkey !== v.badgeKey) {
         v.badgeKey = bkey;
@@ -460,7 +500,7 @@ export class GameScene extends Phaser.Scene {
         v.badge.setText(strat ? strat.toUpperCase() : '');
         if (strat) v.badge.setColor(STRATEGY_COLORS[strat]);
       }
-      v.badge.setPosition(s.x, v.label.y + 17 * labelScale).setScale(labelScale).setDepth(25);
+      v.badge.setPosition(s.x, v.label.y + 17 * labelScale).setScale(labelScale).setDepth(25).setVisible(settings.showNames && screenR > 8);
     }
     for (const [id, v] of this.views) {
       if (cells.has(id)) continue;
@@ -620,12 +660,22 @@ export class GameScene extends Phaser.Scene {
     cam.centerOn(this.camPos.x, this.camPos.y);
   }
 
+  /** Visible world rectangle (for HUD overlays such as threat arrows). */
+  viewRect() {
+    const v = this.cameras.main.worldView;
+    return { x: v.x, y: v.y, w: v.width, h: v.height, zoom: this.cameras.main.zoom };
+  }
+
   private sendInput(now: number) {
     if (now - this.lastInputSent < 50 || !this.net.you) return;
     this.lastInputSent = now;
+    if (this.joystick?.active && this.inputEnabled) {
+      this.net.sendInput(this.joystick.t > 0 ? this.joystick.a : this.ownHeading, this.joystick.t);
+      return;
+    }
     const p = this.input.activePointer;
     const cam = this.cameras.main;
-    if (!this.inputEnabled || (p.wasTouch && !p.isDown)) {
+    if (!this.inputEnabled || p.wasTouch) {
       this.net.sendInput(this.ownHeading, 0);
       return;
     }

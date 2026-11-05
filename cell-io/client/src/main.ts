@@ -4,6 +4,11 @@ import { EvolutionUI } from './evolutionUI';
 import { BackgroundScene, GameScene } from './GameScene';
 import { Hud } from './hud';
 import { Net } from './net';
+import { SPECTATE_SECONDS } from '../../shared/constants';
+import { Joystick } from './joystick';
+import { onSettings, settings, updateSettings } from './settings';
+import { drawThreats } from './threats';
+import { Tutorial } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -14,6 +19,10 @@ const sfx = new Sfx();
 const scene = new GameScene(net, sfx);
 const hud = new Hud(net);
 const evo = new EvolutionUI(net, sfx);
+const tutorial = new Tutorial(net);
+const joystick = new Joystick($('#game'));
+scene.joystick = joystick;
+const threatCanvas = $<HTMLCanvasElement>('#threats');
 
 new Phaser.Game({
   type: Phaser.AUTO,
@@ -27,6 +36,8 @@ new Phaser.Game({
 type Screen = 'menu' | 'playing' | 'dead';
 let screen: Screen = 'menu';
 let lastQueuedToast = 0;
+let lastHud = 0;
+let lastThreats = 0;
 
 const menu = $('#menu');
 const death = $('#death');
@@ -63,19 +74,26 @@ $('#join-form').addEventListener('submit', (e) => {
   } catch {
     /* ignore */
   }
-  net.join(name);
+  // First play: ask the server for the tutorial boost and show the step panel.
+  const tut = tutorial.wanted;
+  net.join(name, tut);
+  if (tut) tutorial.start();
+  sfx.startMusic();
   setScreen('playing');
 });
+tutorial.onDone = () => hud.toast('Tutorial complete!<br><small>Now go and design something nasty</small>', 2600);
 
 $('#again-btn').onclick = () => {
   net.socket.emit('respawn');
+  scene.spectateId = null;
   setScreen('playing');
 };
 
 net.onEvents = (events) => {
   scene.handleEvents(events);
+  tutorial.onEvents(events);
   for (const ev of events) {
-    if (ev.e === 'kill') hud.killfeed(ev.killer, ev.victim);
+    if (ev.e === 'kill') hud.killfeed(ev.killer, ev.victim, ev.how);
     if (ev.e === 'level' && ev.id === net.myId) {
       hud.toast(`Level ${ev.level}!<br><small>New evolution available</small>`);
       evo.dismissed = false;
@@ -94,7 +112,20 @@ net.onDied = (d) => {
   $('#d-kills').textContent = String(d.kills);
   $('#d-biomass').textContent = String(d.biomassCollected);
   $('#death-by').textContent = d.killedBy ? `Consumed by ${d.killedBy}. Peak biomass ${d.peakBiomass}.` : `Peak biomass ${d.peakBiomass}.`;
-  setTimeout(() => setScreen('dead'), 900);
+  // "Killed by" camera: follow the killer for a few seconds before the death screen.
+  const spectate = $('#spectate');
+  if (d.killerId) {
+    scene.spectateId = d.killerId;
+    spectate.textContent = `Killed by ${d.killedBy}`;
+    spectate.classList.remove('hidden');
+  }
+  setTimeout(
+    () => {
+      spectate.classList.add('hidden');
+      if (screen === 'playing') setScreen('dead');
+    },
+    d.killerId ? SPECTATE_SECONDS * 1000 : 900,
+  );
 };
 
 function ability(key: 'dash' | 'toxin' | 'venom') {
@@ -141,12 +172,45 @@ $('#ab-venom').onclick = () => ability('venom');
 scene.onOwnBreak = (type) => hud.toast(`Your ${type === 'membrane' ? 'membrane' : type} broke!<br><small>It regrows in 12 s</small>`, 1500);
 $('#ab-evolve').onclick = () => openEvolution();
 const muteBtn = $('#mute-btn');
-const toggleMute = () => {
-  muteBtn.innerHTML = sfx.toggle() ? '&#128263;' : '&#128266;';
-};
+const toggleMute = () => updateSettings({ mute: !settings.mute });
 muteBtn.onclick = toggleMute;
 
+// Settings panel
+const settingsEl = $('#settings');
+const setMute = $<HTMLInputElement>('#set-mute');
+const setMusic = $<HTMLInputElement>('#set-music');
+const setSfx = $<HTMLInputElement>('#set-sfx');
+const setNames = $<HTMLInputElement>('#set-names');
+const setReduce = $<HTMLInputElement>('#set-reduce');
+onSettings((s) => {
+  sfx.setMuted(s.mute);
+  sfx.setVolumes(s.sfx, s.music);
+  muteBtn.innerHTML = s.mute ? '&#128263;' : '&#128266;';
+  setMute.checked = s.mute;
+  setMusic.value = String(s.music);
+  setSfx.value = String(s.sfx);
+  setNames.checked = s.showNames;
+  setReduce.checked = s.reduceEffects;
+});
+setMute.onchange = () => updateSettings({ mute: setMute.checked });
+setMusic.oninput = () => updateSettings({ music: Number(setMusic.value) });
+setSfx.oninput = () => updateSettings({ sfx: Number(setSfx.value) });
+setNames.onchange = () => updateSettings({ showNames: setNames.checked });
+setReduce.onchange = () => updateSettings({ reduceEffects: setReduce.checked });
+$('#set-tutorial').onclick = () => {
+  updateSettings({ tutorialDone: false });
+  hud.toast('The tutorial will run next time you press Play', 1800);
+};
+const openSettings = () => settingsEl.classList.remove('hidden');
+$('#settings-btn').onclick = openSettings;
+$('#menu-settings').onclick = openSettings;
+$('#settings-close').onclick = () => settingsEl.classList.add('hidden');
+
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !settingsEl.classList.contains('hidden')) {
+    settingsEl.classList.add('hidden');
+    return;
+  }
   if (screen === 'menu') return;
   if (evo.handleKey(e)) {
     e.preventDefault();
@@ -190,7 +254,16 @@ function frame() {
   const now = performance.now();
   updateNetDebug(now);
   if (screen === 'playing') {
-    hud.update(now);
+    // DOM HUD and the threat overlay refresh at 10-15 Hz, not every frame (cheaper on phones).
+    if (now - lastHud > 100) {
+      lastHud = now;
+      hud.update(now);
+      tutorial.onFrame();
+    }
+    if (now - lastThreats > 66) {
+      lastThreats = now;
+      drawThreats(threatCanvas, net, scene.viewRect(), net.you ? scene.focus : null);
+    }
     const pending = net.you?.pendingEvolutions ?? 0;
     // Auto-open the evolution screen when a new evolution becomes available,
     // but only once you have been out of combat for a moment (server enforces this too).

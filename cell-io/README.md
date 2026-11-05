@@ -57,7 +57,17 @@ Dev cheats: start the server with `CELLIO_DEV=1` and, in the browser console, ru
 | F3 | Network debug overlay: ping, snapshot rate, interpolation buffer, prediction error, nutrient delta rate |
 | Evolution screen | Click a card or press **1-4**. Drag or click on the cell to attach. **Wheel / Q / E** tilts surface organelles. **Enter** confirms, **Esc** goes back / closes. |
 
-Touch works through the same pointer path: touch and hold to steer, and the ability buttons are tappable.
+**Touch:** put a finger anywhere on the left two-thirds of the screen and a virtual joystick appears under it. Drag to steer (distance = speed). Ability buttons are tappable. Phones and tablets automatically get a lighter quality tier.
+
+**Settings** (gear button, or "Settings" on the menu): mute, music volume, effects volume, show names, reduce effects (fewer particles, no screen shake) and "play the tutorial again". They are stored in your browser.
+
+## First play and feedback
+
+* **Tutorial (about 60 s, first play only).** A step panel walks you through eating 8 nutrients, reaching level 2, attaching an organelle and dashing. Each step ticks off from real game events, and **Skip tutorial** is always there. The server gives a tutorial cell double nutrient XP until level 2. It honors this once per connection, for a fresh level-1 cell only, so a client cannot farm it.
+* **Kill feed** with the cause ("Didinium spiked Bob", "gassed", "poisoned", ...). **Damage numbers** float off every hit.
+* **"Killed by" camera:** when someone kills you, the server keeps streaming your view around the killer for 3 s and the camera follows them before the death screen.
+* **Threat arrows:** red (armed) or yellow (just bigger) arrows on the screen edge point at dangerous cells just off-screen. Bigger threats get bigger arrows.
+* **Audio:** generative ambient music (a slow minor-key pad plus sparse pentatonic plucks through a delay, all WebAudio), and sounds that follow your layout. A flagellum dash whooshes, a cilia dash flutters, your spikes connecting crunch, and organelles breaking crack.
 
 ## How the game works
 
@@ -231,6 +241,7 @@ cell-io/
 
 ## Known limitations and next steps
 * Prediction covers movement and dash, not collisions or currents' interaction with other cells; those reconcile smoothly.
+* **Performance.** Membrane detail scales with on-screen size (44/32/20/12 points; 36/24/16/10 on touch devices). Tiny cells skip the soft-body simulation and decoration. Cells outside the view build no geometry. The particle budget shrinks when zoomed out, on touch devices and with reduce-effects. The DOM HUD and threat overlay refresh at 10-15 Hz. Measured with Pixel 5 emulation in a GPU-less sandbox: our JavaScript costs about 3.7 ms per frame (down from about 4.4 ms). Most of the remaining frame time there is software rasterization, which a phone's GPU handles. A 3-4x slower phone CPU puts the JavaScript at roughly 11-15 ms per frame, inside the 16.7 ms budget for 60 fps. This is an estimate, not a measurement on real hardware.
 * JSON over Socket.IO. A binary encoding of the flat arrays would cut bandwidth further.
 * Internal organelles are never damaged individually. A natural next step is organelle HP, so hits on a side can disable what is mounted there.
 * Balance numbers live in `shared/organelles.ts` (`TUNING`) and `shared/constants.ts`; `scripts/simulate.ts` helps check pacing after changes.

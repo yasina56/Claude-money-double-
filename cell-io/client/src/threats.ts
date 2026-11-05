@@ -5,7 +5,15 @@
  */
 import type { Net } from './net';
 
+let drewLast = false;
+
+/** Returns quickly (no canvas work at all) when there was and is nothing to draw. */
 export function drawThreats(canvas: HTMLCanvasElement, net: Net, view: { x: number; y: number; w: number; h: number; zoom: number }, me: { x: number; y: number; r: number } | null) {
+  if (!me || !net.you) {
+    if (drewLast) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    drewLast = false;
+    return;
+  }
   const dpr = window.devicePixelRatio || 1;
   const W = Math.round(canvas.clientWidth * dpr);
   const H = Math.round(canvas.clientHeight * dpr);
@@ -15,8 +23,8 @@ export function drawThreats(canvas: HTMLCanvasElement, net: Net, view: { x: numb
   }
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  ctx.clearRect(0, 0, W, H);
-  if (!me || !net.you) return;
+  if (drewLast) ctx.clearRect(0, 0, W, H);
+  drewLast = false;
   const myLevel = net.you.level;
   for (const c of net.latestCells.values()) {
     if (c.id === net.myId) continue;
@@ -42,6 +50,7 @@ export function drawThreats(canvas: HTMLCanvasElement, net: Net, view: { x: numb
     const py = cy + sy * t;
     const size = (10 + Math.min(14, (threat - 1) * 10)) * dpr;
     const alpha = Math.max(0.35, 1 - dist / 1600);
+    drewLast = true;
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(a);

@@ -207,8 +207,8 @@ export class Net {
     return out;
   }
 
-  join(name: string) {
-    this.socket.emit('join', { name });
+  join(name: string, tutorial = false) {
+    this.socket.emit('join', { name, tutorial });
   }
   /** Send steering intent; the predictor records it under a fresh sequence number. */
   sendInput(a: number, t: number) {

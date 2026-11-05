@@ -119,9 +119,10 @@ export class Hud {
     }
   }
 
-  killfeed(killer: string, victim: string) {
+  killfeed(killer: string, victim: string, how = '') {
+    const verb: Record<string, string> = { spike: 'spiked', sting: 'stung', dot: 'poisoned', toxin: 'gassed', bump: 'rammed', acid: 'dissolved' };
     const d = document.createElement('div');
-    d.textContent = `${killer} ☠ ${victim}`;
+    d.textContent = `${killer} ${verb[how] ?? '☠'} ${victim}`;
     this.feed.prepend(d);
     while (this.feed.children.length > 5) this.feed.lastChild?.remove();
     setTimeout(() => d.remove(), 5000);
