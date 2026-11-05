@@ -37,6 +37,8 @@ npm test             # vitest: mechanics, netcode, soft body, Socket.IO integrat
 npm run smoke        # boots the real server, connects 4 clients, steers, evolves, checks acks/deltas/health
 npm run check        # all three
 npm run bench -- 40 60          # per-tick cost with 40 players + bots for 60 simulated seconds
+npm run sim                     # balance harness: duel matrix of the reference builds + 5-minute FFA matches
+npx tsx scripts/tune.ts 24 2    # coordinate-descent tuner over the main TUNING knobs (prints suggested multipliers)
 npx tsx scripts/simulate.ts 7   # headless balance probe: bot progression timings
 ```
 
@@ -91,15 +93,15 @@ The cell's **heading** turns toward the cursor at its turn rate, and thrust depe
 
 | Organelle | Mount | Effect | Placement rule |
 |---|---|---|---|
-| **Cilia** | surface, cost 1 | +8 / 15 / 25% movement effectiveness | Pushes *away* from its side (35% of the bonus is omnidirectional). Side cilia add the most turning. Rear = speed, ring = agility. |
-| **Spikes** | surface, cost 1 | 11 / 16.5 / 23 contact damage × impact speed × size; barbed (III) adds bleed | Only hits inside the spike's ±22° arc count. Needs real closing speed. |
+| **Cilia** | surface, cost 1 | +9 / 17 / 28% movement effectiveness | Pushes *away* from its side (35% of the bonus is omnidirectional). Side cilia add the most turning. Rear = speed, ring = agility. |
+| **Spikes** | surface, cost 1 | 11.5 / 17.5 / 24 contact damage × impact speed × size; barbed (III) adds bleed | Only hits inside the spike's ±22° arc count. Needs real closing speed. |
 | **Stinger** | surface, cost 1 | small damage; delivers venom at full potency, even on light touches | Narrow arc; links to a venom sac on the same side |
-| **Reinforced Membrane** | surface (3 snaps), cost 2 | −35 / 50 / 62% damage from the covered ~72° arc, +HP | Only the covered side is protected. Heavy. |
+| **Reinforced Membrane** | surface (3 snaps), cost 2 | −34 / 47 / 56% damage from the covered ~72° arc, +HP | Only the covered side is protected. Heavy. |
 | **Mitochondria** | internal, cost 1 | +3 / 5 / 7.5 energy/s, +max energy | Centered (or ringing a centered regen nucleus): +15% regeneration |
-| **Venom Sac** | internal, cost 2 | 3 / 4.5 / 6 poison dps per stack (max 3 stacks, 4 s, refreshes); II-III also slow | Must link to a stinger/spike within 70° of its side. A centered sac links to everything at 60%. Spikes deliver at 60%. Each application costs 5 energy. **No delivery, no poison.** |
-| **Regeneration Nucleus** | internal, cost 2 | heals 0.8 / 1.2 / 1.7% max HP/s, ×3 out of combat; costs energy | Center slot: +25% |
+| **Venom Sac** | internal, cost 2 | 2.8 / 4.2 / 5.6 poison dps per stack (max 3 stacks, 4 s, refreshes); II-III also slow | Must link to a stinger/spike within 70° of its side. A centered sac links to everything at 60%. Spikes deliver at 60%. Each application costs 5 energy. **No delivery, no poison.** |
+| **Regeneration Nucleus** | internal, cost 2 | heals 0.5 / 0.75 / 1.1% max HP/s, ×3 out of combat; costs energy | Center slot: +25% |
 | **Flagellum** | surface, cost 2 | +35 / 45 / 55% thrust in a narrow cone, −16 / 13 / 10% turning | Thrusts opposite its mount, so a side flagellum is useless for straight-line speed. Tilt to curve. |
-| **Toxin Gland** | internal, cost 2 | [Q] cloud 9 / 13 / 17 dps for 4 s, 35 energy, 9 s cooldown | Centered: the cloud surrounds you. Edge: the cloud is projected outward on that side. |
+| **Toxin Gland** | internal, cost 2 | [Q] cloud 10 / 13.5 / 17 dps for 4 s, slows 20%, 35 energy, 13 s cooldown. Overlapping clouds from one owner do not stack | Centered: the cloud surrounds you. Edge: the cloud is projected outward on that side. |
 
 The evolution editor shows these consequences live: hit arcs, armor arcs, thrust arrows, venom link cones and toxin cloud previews, plus a before/after stat table (forward vs sideways speed, turning, armor front/side/rear, spike damage front/rear, venom link, and more).
 
@@ -163,6 +165,16 @@ AI cells use exactly the same movement, combat and evolution code as players, in
 * It fires venom surges before aligned hits and toxin clouds at close range.
 
 **Difficulty** follows the strongest human in the room: `difficultyFor(level, biomass)`, 0-1, updated every second. It rises quickly and eases off slowly after that player dies. Higher difficulty means faster reactions (decision interval 0.32 s down to 0.14 s), longer chases and shorter rests, more dashing, earlier cloud avoidance, and stronger spawns (predators and defenders up to +5 levels). `/health` reports each room's current difficulty.
+
+## Balance
+
+`npm run sim` plays the five reference builds in `shared/sim/builds.ts` (Hunter, Tank, Speedster, Toxic, Bruiser) against each other.
+* **Duels:** randomized size, distance, bot skill and reaction time, up to 120 s each. Kills win; otherwise the higher HP share wins.
+* **FFA:** five-minute free-for-all matches in the normal world with bots that grow toward each build from level 1. Reports time to level, lifespan and kills.
+
+Add `--report <file>` to write the tables as Markdown.
+
+The current numbers were tuned so every build's overall duel win rate stays between about 40% and 60% (seed 1: Hunter 52%, Tank 57%, Speedster 43%, Toxic 41%, Bruiser 58%). Method, before/after tables and the remaining hard counter (Bruiser beats Toxic about 90% of the time) are in [`docs/balance-report.md`](docs/balance-report.md). Raw output is in [`docs/balance-sim.md`](docs/balance-sim.md).
 
 ## Architecture
 

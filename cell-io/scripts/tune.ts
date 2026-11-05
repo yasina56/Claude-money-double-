@@ -32,30 +32,30 @@ const apply = () => Object.entries(mult).forEach(([k, v]) => knobs[k](v));
 function evaluate() {
   apply();
   const { score } = runDuels(DUELS, 7);
-  let worst = 0;
-  let sum = 0;
-  let n = 0;
-  for (const a of BUILD_NAMES) for (const b of BUILD_NAMES) {
-    if (a >= b) continue;
-    const dev = Math.abs(score[a][b] - 0.5);
-    worst = Math.max(worst, dev);
-    sum += dev;
-    n++;
+  // Primary: every build's overall win rate near 50% (the "no build wins more
+  // than ~60% of its matchups" goal). Secondary: the single worst pairing.
+  let worstPair = 0;
+  let worstOverall = 0;
+  for (const a of BUILD_NAMES) {
+    const others = BUILD_NAMES.filter((b) => b !== a);
+    const overall = others.reduce((s, b) => s + score[a][b], 0) / others.length;
+    worstOverall = Math.max(worstOverall, Math.abs(overall - 0.5));
+    for (const b of others) worstPair = Math.max(worstPair, Math.abs(score[a][b] - 0.5));
   }
-  return { obj: worst + 0.5 * (sum / n), worst: 0.5 + worst };
+  return { obj: worstOverall + 0.25 * worstPair, worst: 0.5 + worstOverall };
 }
 
 let best = evaluate();
-console.log(`start: worst matchup ${(best.worst * 100).toFixed(0)}%  objective ${best.obj.toFixed(3)}`);
+console.log(`start: worst overall ${(best.worst * 100).toFixed(0)}%  objective ${best.obj.toFixed(3)}`);
 for (let r = 0; r < ROUNDS; r++) {
   for (const k of Object.keys(knobs)) {
-    for (const step of [0.8, 1.25]) {
+    for (const step of [0.85, 1.18]) {
       const old = mult[k];
       mult[k] = Math.max(0.4, Math.min(2.5, old * step));
       const e = evaluate();
       if (e.obj < best.obj - 1e-6) {
         best = e;
-        console.log(`  ${k} x${mult[k].toFixed(2)} -> worst ${(e.worst * 100).toFixed(0)}%  objective ${e.obj.toFixed(3)}`);
+        console.log(`  ${k} x${mult[k].toFixed(2)} -> worst overall ${(e.worst * 100).toFixed(0)}%  objective ${e.obj.toFixed(3)}`);
       } else mult[k] = old;
     }
   }
@@ -64,4 +64,4 @@ apply();
 const final = runDuels(DUELS, 7).score;
 for (const a of BUILD_NAMES) console.log(a.padEnd(10), BUILD_NAMES.map((b) => (a === b ? '  - ' : `${Math.round(final[a][b] * 100)}%`.padStart(4))).join(' '));
 console.log('\nbest multipliers:', JSON.stringify(Object.fromEntries(Object.entries(mult).map(([k, v]) => [k, Number(v.toFixed(3))]))));
-console.log(`worst matchup ${(best.worst * 100).toFixed(0)}%`);
+console.log(`worst overall ${(best.worst * 100).toFixed(0)}%`);

@@ -29,6 +29,10 @@ export const DASH_IMPULSE = 380;
 
 export const MAX_PLAYERS_PER_ROOM = 40;
 export const NAME_MAX = 16;
+/** First-play tutorial: nutrient XP multiplier until level 2. */
+export const TUTORIAL_XP_MULT = 2;
+/** Seconds the camera follows your killer before the death screen. */
+export const SPECTATE_SECONDS = 3;
 
 export function radiusFromBiomass(biomass: number): number {
   return 14 + Math.sqrt(Math.max(0, biomass)) * 2.6;

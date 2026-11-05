@@ -123,12 +123,17 @@ function fight(world: World, c: Cell, target: Cell, st: TacticState, difficulty:
     return steer;
   }
 
-  if (L.hasToxin && gap < 70 + 20 * difficulty) world.toxin(c);
+  // Release the cloud on the attacker's approach path, using the gland's real reach.
+  const reach = L.hasToxin ? c.stats.toxins.reduce((m, t) => Math.max(m, t.radius), 0) * (0.55 + 0.25 * difficulty) : 0;
+  if (L.hasToxin && gap < reach) world.toxin(c);
 
   if (!L.weapon) {
     // Toxin builds: close in armor-first when the gland is ready, release, then back off.
     if (L.hasToxin) {
       const ready = c.toxinCd <= 0 && c.energy >= TUNING.toxinCost;
+      // If they are already coming at us, hold armor-first and let them walk into the cloud.
+      const closing = -((target.vx - c.vx) * dx + (target.vy - c.vy) * dy) / Math.max(1, d);
+      if (ready && closing > 30) return L.armor ? { a: ang - L.armor.dir, t: 0.15 } : { a: ang, t: 0.15 };
       if (ready) return { a: ang, t: 1 };
       if (L.armor && gap < 120) return { a: ang - L.armor.dir, t: 0.2 };
       return { a: away, t: gap < 160 ? 0.9 : 0.3 };
@@ -147,7 +152,9 @@ function fight(world: World, c: Cell, target: Cell, st: TacticState, difficulty:
   // A toxin gland that is ready to fire: hover just outside its reach (circling) and
   // strike once the cloud is on cooldown. This is the gland's intended counterplay.
   const theirs = readLayout(target);
-  if (theirs.hasToxin && target.toxinCd <= 0.5 && target.energy >= TUNING.toxinCost && gap < 150 + 60 * difficulty) {
+  // ...unless it is charging us weapon-first: then hovering just gets us rammed.
+  const charging = !!theirs.weapon && gap < 140 && Math.abs(angleDiff(target.heading + theirs.weapon.dir, ang + Math.PI)) < 0.5;
+  if (theirs.hasToxin && !charging && target.toxinCd <= 0.5 && target.energy >= TUNING.toxinCost && gap < 150 + 60 * difficulty) {
     const circle = ang + (gap < 110 ? 2.2 : 1.6) * (c.id % 2 ? 1 : -1);
     return { a: circle, t: 1 };
   }
@@ -165,8 +172,8 @@ function fight(world: World, c: Cell, target: Cell, st: TacticState, difficulty:
   const steer = { a: aim - L.weapon.dir, t: 1 };
   const aligned = Math.abs(angleDiff(c.heading + L.weapon.dir, ang)) < 0.35;
   if (L.venomLinked && aligned && gap < 200 && c.energy > TUNING.venomSurgeCost + 20) world.venom(c);
-  const reach = 110 + 70 * difficulty;
-  if (aligned && gap < reach && c.energy > 40 && Math.abs(angleDiff(dashAngle(c, steer), ang)) < 0.4) {
+  const dashReach = 110 + 70 * difficulty;
+  if (aligned && gap < dashReach && c.energy > 40 && Math.abs(angleDiff(dashAngle(c, steer), ang)) < 0.4) {
     if (world.rand() < 0.5 + 0.5 * difficulty) world.dash(c);
   }
   return steer;
@@ -184,7 +191,7 @@ function evadeInner(world: World, c: Cell, threat: Cell, L: Layout, difficulty: 
   const gap = d - c.stats.radius - threat.stats.radius;
   const ang = Math.atan2(dy, dx);
   const away = ang + Math.PI;
-  if (L.hasToxin && gap < 60) world.toxin(c);
+  if (L.hasToxin && gap < c.stats.toxins.reduce((m, t) => Math.max(m, t.radius), 0) * 0.6) world.toxin(c);
   // Rear weapon: keep it pointed at the chaser and let it run into it.
   if (L.rearWeapon && gap < 150) return { a: away, t: gap < 60 ? 0.3 : 0.8 };
   // Armor and no speed: turn the plates toward the threat and back off slowly.

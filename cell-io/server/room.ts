@@ -15,7 +15,7 @@ import {
 import { capacityForLevel, capacityUsed } from '../shared/placement';
 import { APEX_LEVEL, xpToNext } from '../shared/progression';
 import { CellFlag, type CellInfo, type ClientToServer, type GameEvent, type LeaderboardEntry, type PrivateState, type ServerToClient, type Snapshot } from '../shared/protocol';
-import { DASH_COOLDOWN, EVOLVE_COMBAT_LOCK } from '../shared/constants';
+import { DASH_COOLDOWN, EVOLVE_COMBAT_LOCK, SPECTATE_SECONDS } from '../shared/constants';
 import { AI_POPULATION, difficultyFor, spawnAI, updateAI, type Archetype } from '../shared/sim/ai';
 import { crackStages, type Cell } from '../shared/sim/cell';
 import { movementSlow, World } from '../shared/sim/world';
@@ -34,6 +34,10 @@ export interface Client {
   nutrientsFull: boolean;
   inputCount: number;
   inputWindowStart: number;
+  /** After death: follow the killer's position until world time `until`. */
+  spectate: { id: number; until: number } | null;
+  /** The tutorial XP boost is granted once per connection. */
+  tutorialUsed: boolean;
 }
 
 export class Room {
@@ -57,6 +61,7 @@ export class Room {
           if (cl.cellId === cell.id) {
             cl.cellId = null;
             cl.lastPos = { x: cell.x, y: cell.y };
+            if (stats.killerId) cl.spectate = { id: stats.killerId, until: this.world.time + SPECTATE_SECONDS };
             cl.socket.emit('died', stats);
           }
         }
@@ -92,6 +97,8 @@ export class Room {
       nutrientsFull: true,
       inputCount: 0,
       inputWindowStart: 0,
+      spectate: null,
+      tutorialUsed: false,
     };
     this.clients.set(socket.id, client);
     socket.join(this.id);
@@ -100,7 +107,7 @@ export class Room {
 
     socket.on('join', (data) => {
       client.name = sanitizeName(data?.name);
-      this.spawnPlayer(client);
+      this.spawnPlayer(client, data?.tutorial === true);
     });
     socket.on('respawn', () => {
       if (!cellOf()) this.spawnPlayer(client);
@@ -185,10 +192,13 @@ export class Room {
     socket.emit('welcome', { id: 0, worldSize: this.world.size, hazards: this.world.hazards, roomId: this.id });
   }
 
-  private spawnPlayer(client: Client) {
+  private spawnPlayer(client: Client, tutorial = false) {
     const old = client.cellId ? this.world.cells.get(client.cellId) : undefined;
     if (old) this.world.removeCell(old.id);
     const c = this.world.addCell('player', client.name);
+    c.tutorial = tutorial && !client.tutorialUsed;
+    if (c.tutorial) client.tutorialUsed = true;
+    client.spectate = null;
     client.cellId = c.id;
     client.known.clear();
     client.knownNutrients.clear();
@@ -249,6 +259,12 @@ export class Room {
 
   private sendSnapshot(client: Client, events: GameEvent[]) {
     const me = client.cellId ? this.world.cells.get(client.cellId) : undefined;
+    // Dead and spectating: the view follows the killer for a few seconds.
+    if (!me && client.spectate) {
+      const k = this.world.cells.get(client.spectate.id);
+      if (k && k.alive && this.world.time < client.spectate.until) client.lastPos = { x: k.x, y: k.y };
+      else client.spectate = null;
+    }
     const cx = me ? me.x : client.lastPos.x;
     const cy = me ? me.y : client.lastPos.y;
     const zoom = cameraZoom(me ? me.stats.radius : 40, client.view.w, client.view.h);

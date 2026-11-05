@@ -104,7 +104,7 @@ export type GameEvent =
   | { e: 'break'; id: number; x: number; y: number; type: string }
   | { e: 'regrow'; id: number; type: string }
   | { e: 'venom'; id: number }
-  | { e: 'kill'; killer: string; victim: string };
+  | { e: 'kill'; killer: string; victim: string; how: string };
 
 export interface EvolutionOffer {
   offers: Offer[];
@@ -118,6 +118,8 @@ export interface DeathStats {
   biomassCollected: number;
   peakBiomass: number;
   killedBy: string | null;
+  /** Cell id the camera follows for SPECTATE_SECONDS after death. */
+  killerId: number | null;
 }
 
 export interface LeaderboardEntry {
@@ -142,7 +144,8 @@ export interface EvolveChoice {
 }
 
 export interface ClientToServer {
-  join: (data: { name: string }) => void;
+  /** `tutorial` asks for the first-play tutorial boost (honored for a fresh level-1 cell only). */
+  join: (data: { name: string; tutorial?: boolean }) => void;
   /** Steering intent. `seq` increases with every message and is echoed back as `ack`. */
   input: (data: { a: number; t: number; seq: number }) => void;
   view: (data: { w: number; h: number }) => void;

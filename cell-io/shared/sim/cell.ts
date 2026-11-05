@@ -64,6 +64,10 @@ export interface Cell {
   pairCooldown: Map<number, number>;
 
   kills: number;
+  /** First-play tutorial cell: double nutrient XP until level 2. */
+  tutorial: boolean;
+  /** Kind of the last damage taken (kill feed: what finished you). */
+  lastHitKind: string;
   bornAt: number;
   biomassCollected: number;
   peakBiomass: number;
@@ -121,6 +125,8 @@ export function createCell(id: number, kind: Cell['kind'], name: string, x: numb
     regenActive: false,
     pairCooldown: new Map(),
     kills: 0,
+    tutorial: false,
+    lastHitKind: '',
     bornAt: now,
     biomassCollected: 0,
     peakBiomass: biomass,

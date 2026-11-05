@@ -21,6 +21,7 @@ import {
   NUTRIENT_TARGET,
   PAIR_HIT_COOLDOWN,
   SPAWN_PROTECTION,
+  TUTORIAL_XP_MULT,
   WORLD_SIZE,
 } from '../constants';
 import { angleDiff, clamp, mulberry32, TAU } from '../math';
@@ -224,7 +225,7 @@ export class World {
       const a = c.heading + t.dir;
       const x = c.x + Math.cos(a) * c.stats.radius * t.offset;
       const y = c.y + Math.sin(a) * c.stats.radius * t.offset;
-      const r = t.radius + c.stats.radius * (t.offset === 0 ? 0.9 : 0.5);
+      const r = t.radius + c.stats.radius * (t.offset === 0 ? TUNING.toxinCenterReach : 0.5);
       this.clouds.push({ id: this.id(), owner: c.id, x, y, r, dps: t.dps, life: TUNING.toxinDuration, maxLife: TUNING.toxinDuration });
       this.events.push({ e: 'toxin', id: c.id, x, y });
     }
@@ -475,7 +476,7 @@ export class World {
       }
       if (gained > 0) {
         this.addBiomass(c, gained);
-        this.addXp(c, xp);
+        this.addXp(c, c.tutorial && c.level < 2 ? xp * TUTORIAL_XP_MULT : xp);
       }
     }
   }
@@ -619,6 +620,7 @@ export class World {
     target.hp -= amount;
     target.lastCombatAt = this.time;
     const sourceId = typeof source === 'number' ? source : source?.id ?? null;
+    target.lastHitKind = kind;
     if (sourceId) {
       target.lastHitBy = sourceId;
       target.lastHitAt = this.time;
@@ -658,7 +660,7 @@ export class World {
       killer.kills++;
       this.addBiomass(killer, victim.biomass * 0.35);
       this.addXp(killer, Math.round(12 + victim.level * 10 + victim.biomass * 0.08));
-      this.events.push({ e: 'kill', killer: killer.name, victim: victim.name });
+      this.events.push({ e: 'kill', killer: killer.name, victim: victim.name, how: victim.lastHitKind });
     }
     // Burst into collectible nutrients.
     const count = clamp(Math.round((victim.biomass * 0.45) / 2), 4, 70);
@@ -675,6 +677,7 @@ export class World {
       biomassCollected: Math.round(victim.biomassCollected),
       peakBiomass: Math.round(victim.peakBiomass),
       killedBy: killer && killer !== victim ? killer.name : null,
+      killerId: killer && killer !== victim && killer.alive ? killer.id : null,
     };
     this.removeCell(victim.id);
     this.onDeath(victim, stats);

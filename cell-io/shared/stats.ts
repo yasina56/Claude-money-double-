@@ -113,7 +113,7 @@ export function computeStats(
         const eff = TUNING.ciliaEff[li];
         thrust.push({ dir: dir + Math.PI, amount: eff, focus: 1, isotropic: 0.35 });
         // Side-mounted cilia (|sin| = 1) help turning the most.
-        turnBonus += eff * (0.4 + 0.9 * Math.abs(Math.sin(at)));
+        turnBonus += eff * (0.3 + 0.6 * Math.abs(Math.sin(at)));
         accelBonus += eff * 0.8;
         break;
       }

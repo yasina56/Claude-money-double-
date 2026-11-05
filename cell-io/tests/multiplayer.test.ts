@@ -82,7 +82,8 @@ describe('multiplayer room', () => {
     });
     a.s.emit('input', { a: 1, t: 1, seq: 5 });
     a.s.emit('input', { a: 2, t: 1, seq: 3 }); // older: must be ignored
-    await new Promise((r) => setTimeout(r, 700));
+    // Wait for a snapshot that reflects the input (robust under parallel test load).
+    for (let i = 0; i < 80 && (acks !== 5 || known.size === 0); i++) await new Promise((r) => setTimeout(r, 50));
     const room = rooms.all.find((r) => r.world.cells.has(wa.id))!;
     const cell = room.world.cells.get(wa.id)!;
     expect(cell.input.a).toBe(1);

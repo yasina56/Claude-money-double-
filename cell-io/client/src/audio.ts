@@ -2,6 +2,10 @@
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private musicBus: GainNode | null = null;
+  private musicTimer: ReturnType<typeof setInterval> | null = null;
+  private sfxVolume = 0.8;
+  private musicVolume = 0.35;
   muted = false;
   private lastEat = 0;
 
@@ -11,8 +15,11 @@ export class Sfx {
       if (!AC) return null;
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.35;
+      this.master.gain.value = 0.35 * this.sfxVolume;
       this.master.connect(this.ctx.destination);
+      this.musicBus = this.ctx.createGain();
+      this.musicBus.gain.value = this.muted ? 0 : this.musicVolume * 0.5;
+      this.musicBus.connect(this.ctx.destination);
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
     return this.ctx;
@@ -23,8 +30,94 @@ export class Sfx {
   }
 
   toggle() {
-    this.muted = !this.muted;
+    this.setMuted(!this.muted);
     return this.muted;
+  }
+
+  setMuted(m: boolean) {
+    this.muted = m;
+    if (this.musicBus) this.musicBus.gain.value = m ? 0 : this.musicVolume * 0.5;
+  }
+
+  setVolumes(sfx: number, music: number) {
+    this.sfxVolume = sfx;
+    this.musicVolume = music;
+    if (this.master) this.master.gain.value = 0.35 * sfx;
+    if (this.musicBus) this.musicBus.gain.value = this.muted ? 0 : music * 0.5;
+  }
+
+  /**
+   * Generative ambient music: a slow pad that drifts through a minor
+   * progression, plus sparse pentatonic plucks through a feedback delay.
+   * Nothing is pre-recorded; it never repeats exactly.
+   */
+  startMusic() {
+    const ctx = this.ensure();
+    if (!ctx || !this.musicBus || this.musicTimer) return;
+    const bus = this.musicBus;
+    const delay = ctx.createDelay(1);
+    delay.delayTime.value = 0.42;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.38;
+    const wet = ctx.createGain();
+    wet.gain.value = 0.5;
+    delay.connect(fb).connect(delay);
+    delay.connect(wet).connect(bus);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    lp.connect(bus);
+    // A minor: Am, F, C, G (roots in Hz, low register)
+    const chords = [
+      [110, 130.81, 164.81],
+      [87.31, 110, 130.81],
+      [130.81, 164.81, 196],
+      [98, 123.47, 146.83],
+    ];
+    const penta = [440, 523.25, 587.33, 659.25, 783.99, 880];
+    let step = 0;
+    const pad = () => {
+      const t0 = ctx.currentTime;
+      for (const f of chords[step % chords.length]) {
+        for (const det of [-4, 4]) {
+          const o = ctx.createOscillator();
+          o.type = 'triangle';
+          o.frequency.value = f;
+          o.detune.value = det;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.05, t0 + 3);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 9.5);
+          o.connect(g).connect(lp);
+          o.start(t0);
+          o.stop(t0 + 10);
+        }
+      }
+      step++;
+    };
+    const pluck = () => {
+      if (Math.random() < 0.45) return;
+      const t0 = ctx.currentTime + Math.random() * 0.8;
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = penta[Math.floor(Math.random() * penta.length)] * (Math.random() < 0.3 ? 0.5 : 1);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.06, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.2);
+      o.connect(g);
+      g.connect(bus);
+      g.connect(delay);
+      o.start(t0);
+      o.stop(t0 + 1.3);
+    };
+    pad();
+    let ticks = 0;
+    this.musicTimer = setInterval(() => {
+      ticks++;
+      if (ticks % 8 === 0) pad();
+      pluck();
+    }, 1000);
   }
 
   private tone(freq: number, dur: number, type: OscillatorType, vol: number, slideTo?: number, delay = 0) {
@@ -96,6 +189,43 @@ export class Sfx {
     this.noise(0.5, 0.6, 1200);
     this.tone(300, 0.6, 'triangle', 0.2, 50);
   }
+  /** Dash flavoured by layout: a flagellum whooshes, cilia flutter. */
+  dashFor(kind: 'flagellum' | 'cilia' | 'plain') {
+    if (kind === 'flagellum') this.sweep(0.4, 350, 2600, 0.35);
+    else if (kind === 'cilia') {
+      for (let i = 0; i < 5; i++) this.tone(900 + i * 140, 0.05, 'triangle', 0.05, 1400, i * 0.035);
+      this.noise(0.18, 0.12, 4000);
+    } else this.dash();
+  }
+
+  /** Your spikes connecting: a meaty crunch. */
+  spikeHit(strong: boolean) {
+    this.noise(strong ? 0.2 : 0.12, strong ? 0.55 : 0.35, 2200);
+    this.tone(strong ? 110 : 150, 0.14, 'square', 0.1, 45);
+  }
+
+  /** Band-passed noise sweep (whoosh). */
+  private sweep(dur: number, f0: number, f1: number, vol: number) {
+    if (this.muted) return;
+    const ctx = this.ensure();
+    if (!ctx || !this.master) return;
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.sin((i / len) * Math.PI);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 2.5;
+    bp.frequency.setValueAtTime(f0, ctx.currentTime);
+    bp.frequency.exponentialRampToValueAtTime(f1, ctx.currentTime + dur);
+    const g = ctx.createGain();
+    g.gain.value = vol;
+    src.connect(bp).connect(g).connect(this.master);
+    src.start();
+  }
+
   /** Organelle breaking: a dry crunch. */
   crunch() {
     this.noise(0.12, 0.6, 3200);

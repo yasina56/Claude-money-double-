@@ -11,7 +11,7 @@ const o = (type: OrganelleType, slot: number, level = 2, tilt = 0): Organelle =>
 export const BUILDS: Record<string, Organelle[]> = {
   Hunter: [o('spikes', 0), o('spikes', 1), o('stinger', 15), o('venom', 1), o('flagellum', 8), o('cilia', 7)],
   Tank: [o('membrane', 0), o('membrane', 8), o('regen', 0), o('spikes', 2), o('mitochondria', 3)],
-  Speedster: [o('cilia', 6), o('cilia', 7), o('cilia', 9), o('cilia', 10), o('flagellum', 8), o('spikes', 0), o('mitochondria', 0)],
+  Speedster: [o('cilia', 6), o('cilia', 7), o('cilia', 9), o('cilia', 10), o('flagellum', 8), o('spikes', 0), o('spikes', 15)],
   Toxic: [o('toxin', 0), o('toxin', 1), o('membrane', 0), o('regen', 4)],
   Bruiser: [o('spikes', 0), o('membrane', 8), o('toxin', 0), o('cilia', 4), o('cilia', 12), o('mitochondria', 1)],
 };
