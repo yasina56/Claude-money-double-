@@ -217,3 +217,32 @@ describe('strategy badge', () => {
     expect(classifyStrategy(rear)).not.toBe('Hunter');
   });
 });
+
+describe('toxin cloud release', () => {
+  it('knocks enemies inside the cloud outward, harder near the centre, but never the owner', () => {
+    const w = quiet();
+    const owner = w.addCell('player', 'gland', 60);
+    place(owner, 2000, 2000, 0, [o('toxin', 0)]);
+    const near = w.addCell('player', 'near', 60);
+    place(near, 2000 + owner.stats.radius + 40, 2000, Math.PI);
+    const far = w.addCell('player', 'far', 60);
+    place(far, 2900, 2000, Math.PI);
+    expect(w.toxin(owner)).toBe(true);
+    expect(near.vx).toBeGreaterThan(50); // pushed away (+x)
+    expect(owner.vx).toBe(0);
+    expect(far.vx).toBe(0);
+  });
+
+  it('pushes heavy cells less than light ones', () => {
+    const push = (biomass: number) => {
+      const w = quiet();
+      const owner = w.addCell('player', 'gland', 60);
+      place(owner, 2000, 2000, 0, [o('toxin', 0)]);
+      const v = w.addCell('player', 'v', biomass);
+      place(v, 2000 + owner.stats.radius + v.stats.radius * 0.5, 2000, 0);
+      w.toxin(owner);
+      return v.vx;
+    };
+    expect(push(400)).toBeLessThan(push(30));
+  });
+});

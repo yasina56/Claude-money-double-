@@ -4,22 +4,22 @@
 
 | | Hunter | Tank | Speedster | Toxic | Bruiser | Overall |
 |---|---|---|---|---|---|---|
-| **Hunter** | - | 41% | 64% | 50% | 52% | 52% |
-| **Tank** | 59% | - | 53% | 49% | 67% | 57% |
+| **Hunter** | - | 41% | 64% | 50% | 53% | 52% |
+| **Tank** | 59% | - | 53% | 45% | 62% | 55% |
 | **Speedster** | 37% | 47% | - | 50% | 37% | 43% |
-| **Toxic** | 51% | 52% | 50% | - | 12% | 41% |
-| **Bruiser** | 48% | 33% | 64% | 88% | - | 58% |
+| **Toxic** | 51% | 55% | 50% | - | 28% | 46% |
+| **Bruiser** | 48% | 38% | 64% | 72% | - | 55% |
 
-Highest single matchup: **88%**. Duels decided by a kill: 51%; average duel length 83 s.
+Highest single matchup: **72%**. Duels decided by a kill: 51%; average duel length 82 s.
 
 ### Five-minute FFA matches (3 bots per build, normal world and wildlife)
 
 | Build | Time to L2 | Time to L5 | Time to L8 | Avg lifespan | Kills per life | Avg final biomass | Top-biomass finishes |
 |---|---|---|---|---|---|---|---|
-| **Hunter** | 31 s | 158 s | n/a (0) | 167 s | 0.26 | 172 | 2/10 |
-| **Tank** | 32 s | 236 s | n/a (0) | 184 s | 0.04 | 100 | 0/10 |
-| **Speedster** | 34 s | 231 s | n/a (0) | 205 s | 0.23 | 204 | 5/10 |
-| **Toxic** | 40 s | 185 s | n/a (0) | 180 s | 0.10 | 108 | 1/10 |
-| **Bruiser** | 39 s | 205 s | n/a (0) | 176 s | 0.31 | 172 | 2/10 |
+| **Hunter** | 35 s | 202 s | n/a (0) | 180 s | 0.36 | 200 | 4/10 |
+| **Tank** | 41 s | n/a | n/a (0) | 150 s | 0.05 | 91 | 0/10 |
+| **Speedster** | 36 s | 232 s | n/a (0) | 196 s | 0.13 | 179 | 2/10 |
+| **Toxic** | 40 s | 226 s | n/a (0) | 184 s | 0.02 | 129 | 2/10 |
+| **Bruiser** | 37 s | 190 s | n/a (0) | 176 s | 0.43 | 171 | 2/10 |
 
-(Time to L8 shows in brackets how many lives got there.) Ran in 37 s.
+(Time to L8 shows in brackets how many lives got there.) Ran in 23 s.

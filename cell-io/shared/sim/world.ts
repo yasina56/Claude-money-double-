@@ -228,8 +228,32 @@ export class World {
       const r = t.radius + c.stats.radius * (t.offset === 0 ? TUNING.toxinCenterReach : 0.5);
       this.clouds.push({ id: this.id(), owner: c.id, x, y, r, dps: t.dps, life: TUNING.toxinDuration, maxLife: TUNING.toxinDuration });
       this.events.push({ e: 'toxin', id: c.id, x, y });
+      this.toxinKnockback(c, x, y, r);
     }
     return true;
+  }
+
+  /**
+   * The burst of a released cloud shoves enemies inside it away from its
+   * center: strongest at the center, weaker for heavy cells. Gives toxin
+   * builds an answer to rammers (the spike never lands).
+   */
+  private toxinKnockback(owner: Cell, x: number, y: number, r: number) {
+    this.rebuildCellGrid();
+    this.cellsNear(x, y, r, (o) => {
+      if (o === owner || o.spawnProtect > 0) return;
+      const dx = o.x - x;
+      const dy = o.y - y;
+      const d = Math.hypot(dx, dy);
+      const reach = r + o.stats.radius * 0.6;
+      if (d >= reach) return;
+      const k = TUNING.toxinKnockback * (1 - d / reach) * Math.pow(22 / o.stats.radius, 0.35);
+      // Directly at the center: push away from the owner instead.
+      const nx = d > 1 ? dx / d : Math.cos(owner.heading);
+      const ny = d > 1 ? dy / d : Math.sin(owner.heading);
+      o.vx += nx * k;
+      o.vy += ny * k;
+    });
   }
 
   /** Venom surge: for a few seconds every linked hit injects double poison. */

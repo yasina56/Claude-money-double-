@@ -204,7 +204,7 @@ export const ORGANELLES: Record<OrganelleType, OrganelleDef> = {
     unlockLevel: 7,
     color: 0xc6ff3d,
     levelNames: ['Toxin Gland', 'Caustic Gland', 'Miasma Gland'],
-    levelText: ['[Q] Toxic cloud: 10 dmg/s for 4 s, slows 20%', '[Q] 13.5 dmg/s, larger cloud', '[Q] 17 dmg/s, larger cloud'],
+    levelText: ['[Q] Toxic cloud: 10 dmg/s for 6 s, slows 20%, shoves enemies out', '[Q] 13.5 dmg/s, larger cloud', '[Q] 17 dmg/s, larger cloud'],
     placement: 'Internal. The cloud is released on the gland’s side: centered glands surround you, edge glands project the cloud outward.',
     strengths: 'Zone control; punishes chasers and huggers.',
     weaknesses: '35 energy, 9s cooldown; easy to walk out of.',
@@ -242,6 +242,8 @@ export const TUNING = {
   toxinDps: [10, 13.5, 17],
   /** Enemies inside a toxin cloud move this much slower. */
   toxinSlow: 0.2,
+  /** Outward push (px/s at the cloud centre, before size scaling) when a cloud is released. */
+  toxinKnockback: 380,
   /** Extra cloud radius (in cell radii) for a centered gland; edge glands get 0.5. */
   toxinCenterReach: 0.4,
   /** Blunt collision damage per px/s of closing speed above 90. */
@@ -249,5 +251,5 @@ export const TUNING = {
   toxinRadius: [80, 100, 120],
   toxinCost: 35,
   toxinCooldown: 13,
-  toxinDuration: 4,
+  toxinDuration: 6,
 };

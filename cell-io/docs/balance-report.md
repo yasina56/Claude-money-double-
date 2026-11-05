@@ -53,6 +53,8 @@ Most of the imbalance came from behavior, not numbers. Bots with these layouts d
 | Regeneration (in combat) I/II/III | 0.8 / 1.2 / 1.7% max HP/s | 0.5 / 0.75 / 1.1% |
 | Venom dps per stack I/II/III | 3 / 4.5 / 6 | 2.8 / 4.2 / 5.6 |
 | Toxin dps I/II/III | 9 / 13 / 17 | 10 / 13.5 / 17 |
+| Toxin cloud duration | 4 s | 6 s |
+| Toxin release knockback | none | 380 px/s at the centre, less for heavy cells |
 | Toxin cooldown | 9 s | 13 s |
 | Toxin slow | none | 20% |
 | Centered gland extra reach | 0.9 radii | 0.4 radii |
@@ -68,17 +70,21 @@ Overall duel win rate per build (100 duels per pairing):
 
 | Build | Seed 1 | Seed 2 |
 |---|---|---|
-| Hunter | 52% | 50% |
-| Tank | 57% | 57% |
-| Speedster | 43% | 44% |
-| Toxic | 41% | 40% |
-| Bruiser | 58% | 60% |
+| Hunter | 52% | 52% |
+| Tank | 55% | 56% |
+| Speedster | 43% | 45% |
+| Toxic | 46% | 43% |
+| Bruiser | 55% | 55% |
 
-No build beats the field by more than ~60%. Full matrices are in [`balance-sim.md`](balance-sim.md).
+No build beats the field by more than ~56%. Full matrices are in [`balance-sim.md`](balance-sim.md).
 
 ## Remaining issues
 
-* **Bruiser hard-counters Toxic (88-93%).** Toxic has no melee weapon, so a build with a spike that flanks its single front membrane and outlasts its clouds wins most fights. Every other pairing is 33-67%. Options: give glands a short knockback or a stronger slow, or add a third Toxic layout with a stinger.
+* **Bruiser still beats Toxic (72-82%), down from 88-93%.** Toxic has no melee weapon. Bruiser waits out its gland cooldown, then rams a side its single front membrane does not cover. Two follow-up changes helped:
+  * Clouds now linger 6 s instead of 4 s, so the zone is harder to wait out.
+  * Releasing a cloud now knocks enemies inside it outward. This barely changes bot duels, since bots already avoid ready glands, but it gives a human an answer to a rammer.
+
+  Every other pairing is 35-65%. A Toxic variant with a stinger would be the next thing to try.
 * **Speedster sits low in duels (43%) but is the best FFA survivor.** It has the longest average lifespan and the most top-biomass finishes. That fits its design: it runs rather than brawls.
 * **About half of duels end without a kill**, decided on HP share after 120 s. Regeneration and armor make 1v1 fights slow, which is intended (no instant kills), but it means the matrix partly measures sustain.
 * **Bot skill.** The harness uses the in-game bot tactics. A skilled human will play every build better than the bots, especially Speedster and Hunter, which reward timing.
