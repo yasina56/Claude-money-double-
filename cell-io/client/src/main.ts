@@ -13,8 +13,12 @@ import { Tutorial } from './tutorial';
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 // VITE_SOLO=1 builds run the authoritative server inside the page (single player, no backend).
-const localSocket = import.meta.env.VITE_SOLO === '1' ? (await import('./solo')).createLocalSocket() : undefined;
-const net = new Net(localSocket);
+// If VITE_SERVER_URL was set at build time, the solo build also offers "Play online" (?online).
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || undefined;
+const SOLO_BUILD = import.meta.env.VITE_SOLO === '1';
+const ONLINE = !SOLO_BUILD || (!!SERVER_URL && new URLSearchParams(location.search).has('online'));
+const localSocket = ONLINE ? undefined : (await import('./solo')).createLocalSocket();
+const net = new Net(localSocket, ONLINE ? SERVER_URL : undefined);
 const sfx = new Sfx();
 const scene = new GameScene(net, sfx);
 const hud = new Hud(net);
@@ -59,10 +63,23 @@ function setScreen(s: Screen) {
 }
 
 net.onConnection = (ok) => {
-  status.textContent = ok ? 'Connected. Ready to evolve.' : 'Disconnected from server. Retrying…';
+  status.textContent = ok ? (ONLINE ? 'Connected. Ready to evolve.' : 'Solo mode: the arena runs in your browser.') : 'Disconnected from server. Retrying…';
   playBtn.disabled = !ok;
 };
 playBtn.disabled = true;
+if (ONLINE && SERVER_URL) {
+  // Free hosting sleeps when idle; the first connection can take a while.
+  setTimeout(() => {
+    if (!net.connected) status.textContent = 'Waking up the server (free hosting can take ~30-60 s)…';
+  }, 3000);
+}
+// Mode switch links (solo build only).
+const modeLink = $<HTMLAnchorElement>('#mode-link');
+if (SOLO_BUILD && SERVER_URL) {
+  modeLink.classList.remove('hidden');
+  modeLink.textContent = ONLINE ? 'Play solo instead' : 'Play online with others';
+  modeLink.href = ONLINE ? location.pathname : `${location.pathname}?online`;
+}
 
 $('#join-form').addEventListener('submit', (e) => {
   e.preventDefault();

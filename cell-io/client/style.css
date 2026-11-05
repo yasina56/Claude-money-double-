@@ -129,7 +129,9 @@ button.ghost { background: transparent; }
 .settings-card input[type=range] { width: 160px; accent-color: var(--accent); }
 .settings-card input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 .settings-card .primary { align-self: flex-end; margin-top: 6px; }
-.menu-links { margin: 6px 0 0; }
+.menu-links { margin: 6px 0 0; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+a.button-link { color: var(--accent); border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px 14px; text-decoration: none; font-weight: 700; }
+a.button-link:hover { background: rgba(94,242,214,0.1); }
 #settings-btn { left: 62px; }
 #settings { z-index: 20; }
 button.small { font-size: 12px; padding: 4px 8px; }

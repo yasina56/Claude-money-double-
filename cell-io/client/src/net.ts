@@ -83,9 +83,13 @@ export class Net {
   /** Called with nutrient ids that disappeared since the last nutrient update. */
   onNutrientsRemoved: (ids: number[]) => void = () => {};
 
-  /** Pass a socket-like object to run against an in-browser server (offline build). */
-  constructor(socket?: Socket<ServerToClient, ClientToServer>) {
-    this.socket = socket ?? io({ transports: ['websocket', 'polling'] });
+  /**
+   * @param socket a socket-like object to run against an in-browser server (solo build)
+   * @param serverUrl game server to connect to; omitted = the page's own origin
+   */
+  constructor(socket?: Socket<ServerToClient, ClientToServer>, serverUrl?: string) {
+    const opts = { transports: ['websocket', 'polling'] };
+    this.socket = socket ?? (serverUrl ? io(serverUrl, opts) : io(opts));
     this.socket.on('connect', () => {
       this.connected = true;
       this.onConnection(true);

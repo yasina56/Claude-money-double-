@@ -44,6 +44,33 @@ npx tsx scripts/simulate.ts 7   # headless balance probe: bot progression timing
 
 Dev cheats: start the server with `CELLIO_DEV=1` and, in the browser console, run `cellioDevXp(500)` (grant XP) or `cellioDevTp()` (jump next to another player). They are disabled unless that variable is set.
 
+## Deploy
+
+**Server on Render (free tier)**
+1. Push this repo to GitHub.
+2. In Render: **New → Blueprint**, pick the repo. Render reads [`render.yaml`](../render.yaml) at the repo root: a Docker web service built from [`cell-io/Dockerfile`](Dockerfile), free plan, health check on `/health`.
+3. Render injects `PORT`; the server listens on it. Your server URL looks like `https://cell-io.onrender.com`.
+
+Free Render services sleep when idle, so the first visit can take 30-60 s while it wakes. The menu says so.
+
+Run the same image anywhere:
+
+```bash
+docker build -t cell-io cell-io
+docker run -p 3001:3001 cell-io          # PORT defaults to 3001
+# Docker Hub rate-limited? use the official image from AWS's mirror:
+docker build --build-arg NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine -t cell-io cell-io
+```
+
+The image is two-stage: build stage `npm ci` + `npm run build`; runtime stage production dependencies only plus `dist/client`, `shared/` and `server/`. It runs as the unprivileged `node` user and has a Docker `HEALTHCHECK` on `/health`.
+
+**Solo build on GitHub Pages + "Play online"**
+* `VITE_SERVER_URL` (build-time env var) tells the client where the game server is. The solo build then shows a **Play online with others** link that reloads with `?online` and connects there (the server allows cross-origin Socket.IO). Without it, the solo build is single-player only.
+* [`.github/workflows/cellio.yml`](../.github/workflows/cellio.yml) runs `npm ci`, typecheck, tests and the smoke test on every push and pull request that touches `cell-io/`. On the default branch it then builds the solo version with `VITE_SERVER_URL` from the repository variable `CELLIO_SERVER_URL` and deploys it to GitHub Pages.
+* One-time setup:
+  1. **Settings → Pages → Source: GitHub Actions.**
+  2. Optionally, **Settings → Secrets and variables → Actions → Variables → `CELLIO_SERVER_URL`** = your Render URL.
+
 ## Controls
 
 | Input | Action |
