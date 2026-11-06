@@ -2,15 +2,17 @@
 """While You're at Work -- a low-poly 3D pet story short.
 
 A tiny software 3D renderer (numpy + cairo) draws faceted, flat-shaded low-poly
-scenes; Piper TTS narrates; the captions appear one word at a time in a chunky
-pixel font. Every model, sound and note of music is generated here.
+scenes; the open Kokoro TTS model narrates, Whisper times every word, and the
+captions show short phrases with the spoken word highlighted. Every model,
+sound and note of music is generated here.
 
-    pip install pycairo numpy piper-tts      # plus FFmpeg
+    pip install pycairo numpy kokoro-onnx faster-whisper   # plus FFmpeg
     python3 make_short.py                     # -> out/while-youre-at-work.mp4
     python3 make_short.py --sheet             # -> out/sheet.png (one frame per shot)
     python3 make_short.py --still 4.2         # -> out/still.png
 
-The first run downloads the Piper voice (about 60 MB) into ./voices.
+The first run downloads the Kokoro voice model (about 330 MB) and the Whisper
+base.en model (about 150 MB) into ./voices.
 """
 import argparse
 import math
@@ -28,8 +30,6 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 VOICE_DIR = os.path.join(HERE, "voices")
-VOICE = "en_US-lessac-medium"
-VOICE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/"
 W, H, FPS = 1080, 1920, 30
 TAU = math.tau
 
@@ -819,118 +819,232 @@ GRAY_SHOTS = {"memory"}
 
 
 # ============================================================================ narration + timeline
-def ensure_voice():
-    path = os.path.join(VOICE_DIR, VOICE + ".onnx")
+KOKORO_DIR = os.path.join(VOICE_DIR, "kokoro")
+KOKORO_URL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/"
+VOICE_NAME = "af_heart"  # Kokoro's warmest US English narrator
+SPEED = 0.9
+# Narration lines spoken in one breath (indexes into SEGMENTS), and the pause after each, in seconds.
+UTTERANCES = [([0], 0.3), ([1], 0.45), ([2, 3], 0.35), ([4], 0.6), ([5, 6], 0.45), ([7, 8], 0.4), ([9, 10], 0.0)]
+
+
+def _download(url, path):
     if not os.path.exists(path):
-        os.makedirs(VOICE_DIR, exist_ok=True)
-        for ext in (".onnx", ".onnx.json"):
-            print("downloading", VOICE + ext, file=sys.stderr)
-            urllib.request.urlretrieve(VOICE_URL + VOICE + ext, os.path.join(VOICE_DIR, VOICE + ext))
-    return path
+        print("downloading", os.path.basename(path), file=sys.stderr)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        urllib.request.urlretrieve(url, path)
 
 
-def tts(voice, text, length_scale=1.12):
-    from piper import SynthesisConfig
-    cfg = SynthesisConfig(length_scale=length_scale, noise_scale=0.6, noise_w_scale=0.7)
-    a = np.concatenate([c.audio_float_array for c in voice.synthesize(text, syn_config=cfg)])
-    return a, 22050
+def ensure_kokoro():
+    """Fetch the Kokoro model and voice from Hugging Face (once) and pack the voice for kokoro-onnx."""
+    model = os.path.join(KOKORO_DIR, "model.onnx")
+    _download(KOKORO_URL + "onnx/model.onnx", model)
+    vbin = os.path.join(KOKORO_DIR, "voices", VOICE_NAME + ".bin")
+    _download(KOKORO_URL + f"voices/{VOICE_NAME}.bin", vbin)
+    packed = os.path.join(KOKORO_DIR, f"{VOICE_NAME}.npz")
+    if not os.path.exists(packed):
+        np.savez(packed, **{VOICE_NAME: np.fromfile(vbin, dtype=np.float32).reshape(-1, 1, 256)})
+    return model, packed
 
 
-def voiced_span(a, sr, thr=0.02):
-    idx = np.nonzero(np.abs(a) > thr)[0]
-    return (idx[0] / sr, idx[-1] / sr) if len(idx) else (0, len(a) / sr)
+def ensure_fonts():
+    """Register the bundled caption font (Montserrat Black, SIL OFL) with fontconfig."""
+    src = os.path.join(HERE, "fonts", "Montserrat-Black.ttf")
+    dst_dir = os.path.expanduser("~/.local/share/fonts")
+    dst = os.path.join(dst_dir, "Montserrat-Black.ttf")
+    if not os.path.exists(dst):
+        os.makedirs(dst_dir, exist_ok=True)
+        with open(src, "rb") as a, open(dst, "wb") as b:
+            b.write(a.read())
+        subprocess.run(["fc-cache", "-f", dst_dir], check=False)
 
 
-def words_of(text):
-    return [re.sub(r"[^A-Za-z0-9']", "", w).upper() for w in text.split()]
+def _norm(s):
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def align_words(script_words, heard):
+    """Give each script word the start/end time of the letters Whisper heard for it.
+
+    Matching letter by letter copes with Whisper splitting or joining words
+    ("windowsill" -> "window sill"); words it missed are interpolated."""
+    import difflib
+    sc = "".join(_norm(w) for w in script_words)
+    hc, ht = [], []
+    for w in heard:
+        for ch in _norm(w.word):
+            hc.append(ch)
+            ht.append((w.start, w.end))
+    cmap = {}
+    for a, b, size in difflib.SequenceMatcher(None, sc, "".join(hc), autojunk=False).get_matching_blocks():
+        for k in range(size):
+            cmap[a + k] = b + k
+    times, pos = [], 0
+    for w in script_words:
+        idx = [cmap[i] for i in range(pos, pos + len(_norm(w))) if i in cmap]
+        times.append([ht[idx[0]][0], ht[idx[-1]][1]] if idx else None)
+        pos += len(_norm(w))
+    for i, tm in enumerate(times):
+        if tm is None:
+            prev = times[i - 1][1] if i and times[i - 1] else 0.0
+            nxt = next((x[0] for x in times[i + 1:] if x), prev + 0.3)
+            times[i] = [prev, max(prev + 0.08, nxt)]
+    for i in range(1, len(times)):
+        times[i][0] = max(times[i][0], times[i - 1][0] + 0.02)
+    return times
+
+
+WEAK_WORDS = {"the", "a", "an", "to", "your", "on", "and", "for", "of", "that", "she", "you", "it", "like", "but",
+              "when", "then", "shes"}
+
+
+def caption_chunks(words):
+    """Group words into short phrases for on-screen captions.
+
+    Each clause (split at punctuation) becomes one phrase if it is short, otherwise it is
+    split into balanced 2-3 word phrases, preferring breaks that don't strand a single
+    word or end a phrase on a small word like "the" or "your"."""
+    clauses, cur = [], []
+    for i, w in enumerate(words):
+        cur.append(w)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if nxt is None or re.search(r"[,.!?…]$", w["raw"]) or nxt["seg"] != w["seg"]:
+            clauses.append(cur)
+            cur = []
+    chunks = []
+    for cl in clauses:
+        n, letters = len(cl), sum(len(w["text"]) for w in cl)
+        if n <= 3 or letters <= 16 or (n == 4 and letters <= 20):
+            parts = [cl]
+        else:
+            parts, prev, k = [], 0, math.ceil(n / 3)
+            while k > 1:
+                target = prev + round((n - prev) / k)
+
+                def score(c):
+                    return (abs(c - target) + 3 * (_norm(cl[c - 1]["raw"]) in WEAK_WORDS)
+                            + 3 * (c - prev == 1) + 3 * (n - c == 1))
+                c = min(range(prev + 1, n), key=score)
+                parts.append(cl[prev:c])
+                prev, k = c, k - 1
+            parts.append(cl[prev:])
+        chunks += [dict(words=p, t0=p[0]["t0"], t1=p[-1]["t1"]) for p in parts]
+    for a, b in zip(chunks, chunks[1:]):  # hold a phrase on screen until the next one if the gap is short
+        a["t1"] = b["t0"] if b["t0"] - a["t1"] < 0.45 else a["t1"] + 0.25
+    chunks[-1]["t1"] += 0.6
+    return chunks
 
 
 def build_timeline():
-    """Synthesise each line, then time each word by how long it takes to say on its own."""
-    from piper import PiperVoice
-    voice = PiperVoice.load(ensure_voice())
-    sr = 22050
-    t = 0.35
-    clips, words, shots = [], [], []
-    for text, shot_list in SEGMENTS:
-        a, sr = tts(voice, text)
-        v0, v1 = voiced_span(a, sr)
-        ws = text.split()
-        weights = []
-        for w in ws:
-            wa, _ = tts(voice, w)
-            s0, s1 = voiced_span(wa, sr)
-            weights.append(max(0.08, s1 - s0) + (0.12 if re.search(r"[,.]$", w) else 0))
-        weights = np.array(weights) / sum(weights)
-        starts = t + v0 + np.concatenate([[0], np.cumsum(weights)[:-1]]) * (v1 - v0)
-        ends = np.append(starts[1:], t + v1 + 0.15)
-        seg_words = [dict(text=words_of(w)[0], t0=s, t1=e) for w, s, e in zip(ws, starts, ends)]
+    from faster_whisper import WhisperModel
+    from kokoro_onnx import Kokoro
+    model, packed = ensure_kokoro()
+    tts = Kokoro(model, packed)
+    asr = WhisperModel("base.en", device="cpu", compute_type="int8", download_root=os.path.join(VOICE_DIR, "whisper"))
+    t = 0.4
+    clips, words, shots, sr = [], [], [], 24000
+    for seg_ids, pause in UTTERANCES:
+        text = " ".join(SEGMENTS[i][0] for i in seg_ids)
+        a, sr = tts.create(text, voice=VOICE_NAME, speed=SPEED, lang="en-us")
+        loud = np.nonzero(np.abs(a) > 0.01)[0]
+        a = a[max(0, loud[0] - int(0.04 * sr)): loud[-1] + int(0.12 * sr)]
+        a16 = np.interp(np.arange(0, len(a), sr / 16000), np.arange(len(a)), a).astype(np.float32)
+        segs, _ = asr.transcribe(a16, word_timestamps=True, language="en", initial_prompt=text)
+        heard = [w for s in segs for w in s.words]
+        sw = text.split()
+        times = align_words(sw, heard)
         k = 0
-        for name, n in shot_list:
-            shots.append(dict(name=name, t0=seg_words[k]["t0"] if shots else 0.0))
+        for i in seg_ids:
+            seg_text, shot_list = SEGMENTS[i]
+            n = len(seg_text.split())
+            seg_words = [dict(text=re.sub(r"[^A-Za-z0-9'’]", "", w).upper(), raw=w, t0=t + s, t1=t + e, seg=i)
+                         for w, (s, e) in zip(sw[k:k + n], times[k:k + n])]
+            kk = 0
+            for name, nw in shot_list:  # cut a beat before the word lands
+                shots.append(dict(name=name, t0=max(0.0, seg_words[kk]["t0"] - 0.08) if shots else 0.0))
+                kk += nw
+            assert kk == n, f"shot word counts don't add up for: {seg_text}"
+            words += seg_words
             k += n
-        assert k == len(ws), f"shot word counts don't add up for: {text}"
-        words += seg_words
         clips.append((t, a))
-        t += len(a) / sr + 0.12
-    total = t + 0.9
+        t += len(a) / sr + pause
+    total = t + 1.1
     for i, s in enumerate(shots):
         s["t1"] = shots[i + 1]["t0"] if i + 1 < len(shots) else total
-    return dict(words=words, shots=shots, total=total, clips=clips, sr=sr)
+    return dict(words=words, chunks=caption_chunks(words), shots=shots, total=total, clips=clips, sr=sr)
 
 
 # ============================================================================ captions
-def caption(ctx, word):
-    """One word in a chunky pixel font: drawn small without anti-aliasing, then scaled up."""
-    sc = 6
-    sw, sh = W // sc, 80
-    s = cairo.ImageSurface(cairo.FORMAT_ARGB32, sw, sh)
-    c = cairo.Context(s)
-    c.set_antialias(cairo.ANTIALIAS_NONE)
-    fo = cairo.FontOptions()
-    fo.set_antialias(cairo.ANTIALIAS_NONE)
-    fo.set_hint_style(cairo.HINT_STYLE_FULL)
-    c.set_font_options(fo)
-    c.select_font_face("DejaVu Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    size = 17
-    c.set_font_size(size)
-    spacing = 1
-    widths = [c.text_extents(ch).x_advance + spacing for ch in word]
-    while sum(widths) > sw - 12 and size > 11:
-        size -= 1
-        c.set_font_size(size)
-        widths = [c.text_extents(ch).x_advance + spacing for ch in word]
-    x = (sw - sum(widths)) / 2
-    y = sh / 2 + size * 0.36
-    c.new_path()
-    xx = x
-    for ch, wdt in zip(word, widths):
-        c.move_to(round(xx), round(y))
-        c.text_path(ch)
-        xx += wdt
-    path = c.copy_path()
-    c.translate(1, 2)  # drop shadow
-    c.append_path(path)
-    c.set_source_rgb(0.05, 0.03, 0.02)
-    c.set_line_width(3)
-    c.set_line_join(cairo.LINE_JOIN_MITER)
-    c.stroke_preserve()
-    c.fill()
-    c.identity_matrix()
-    c.append_path(path)
-    c.set_line_width(3)
-    c.stroke_preserve()
-    g = cairo.LinearGradient(0, y - size * 0.75, 0, y)
-    g.add_color_stop_rgb(0, 1.0, 0.92, 0.35)
-    g.add_color_stop_rgb(1, 0.98, 0.62, 0.1)
-    c.set_source(g)
-    c.fill()
+CAP_FONT = "Montserrat Black"
+CAP_Y = 0.70  # vertical centre of the captions, as a fraction of the height
+CAP_ACTIVE = (1.0, 0.84, 0.2)  # the word being spoken
+CAP_TEXT = (1.0, 1.0, 1.0)
+
+
+def ease_out_back(x):
+    x = clamp(x)
+    return 1 + 2.70158 * (x - 1) ** 3 + 1.70158 * (x - 1) ** 2
+
+
+def caption(ctx, chunk, t):
+    """A 2-3 word phrase in bold Montserrat; the spoken word turns yellow and pops up a little."""
+    words = [w["text"] for w in chunk["words"]]
+    active = max((i for i, w in enumerate(chunk["words"]) if w["t0"] <= t), default=0)
     ctx.save()
-    ctx.translate(0, H * 0.53 - sh * sc / 2)
-    ctx.scale(sc, sc)
-    ctx.set_source_surface(s, 0, 0)
-    ctx.get_source().set_filter(cairo.FILTER_NEAREST)
-    ctx.paint()
+    ctx.select_font_face(CAP_FONT, cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+    size = 88
+    ctx.set_font_size(size)
+    space = ctx.text_extents(" ").x_advance * 1.1
+    widths = [ctx.text_extents(w).x_advance for w in words]
+    lines, cur, cw = [], [], 0.0  # wrap to at most two lines
+    for i, wd in enumerate(widths):
+        if cur and cw + space + wd > W - 110:
+            lines.append(cur)
+            cur, cw = [], 0.0
+        cw += (space if cur else 0) + wd
+        cur.append(i)
+    lines.append(cur)
+    pop = ease_out_back((t - chunk["t0"]) / 0.22)
+    line_h = size * 1.12
+    cy = H * CAP_Y
+    ctx.translate(W / 2, cy)
+    ctx.scale(0.75 + 0.25 * pop, 0.75 + 0.25 * pop)
+    ctx.translate(-W / 2, -cy)
+    alpha = clamp((t - chunk["t0"]) / 0.08) * clamp((chunk["t1"] - t) / 0.08 + 0.001)
+    ctx.push_group()
+    for li, line in enumerate(lines):
+        lw = sum(widths[i] for i in line) + space * (len(line) - 1)
+        x = W / 2 - lw / 2
+        base = cy + (li - (len(lines) - 1) / 2) * line_h + size * 0.36
+        for i in line:
+            k = 1.0
+            if i == active:  # the spoken word grows a little as it starts
+                k = 1 + 0.12 * (1 - clamp((t - chunk["words"][i]["t0"]) / 0.18)) + 0.06
+            ctx.save()
+            cx = x + widths[i] / 2
+            ctx.translate(cx, base - size * 0.36)
+            ctx.scale(k, k)
+            ctx.translate(-cx, -(base - size * 0.36))
+            ctx.move_to(x, base)
+            ctx.text_path(words[i])
+            path = ctx.copy_path()
+            ctx.new_path()
+            ctx.translate(0, 9)  # soft drop shadow
+            ctx.append_path(path)
+            ctx.set_source_rgba(0, 0, 0, 0.35)
+            ctx.set_line_width(24)
+            ctx.set_line_join(cairo.LINE_JOIN_ROUND)
+            ctx.stroke()
+            ctx.translate(0, -9)
+            ctx.append_path(path)
+            ctx.set_source_rgb(0.04, 0.03, 0.05)  # thick outline
+            ctx.set_line_width(16)
+            ctx.stroke_preserve()
+            ctx.set_source_rgb(*(CAP_ACTIVE if i == active else CAP_TEXT))
+            ctx.fill()
+            ctx.restore()
+            x += widths[i] + space
+    ctx.pop_group_to_source()
+    ctx.paint_with_alpha(alpha)
     ctx.restore()
 
 
@@ -975,9 +1089,9 @@ def render_frame(i):
         rgb *= vignette()
     a[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
     surf.mark_dirty()
-    word = next((w for w in TL["words"] if w["t0"] <= t < w["t1"]), None)
-    if word:
-        caption(ctx, word["text"])
+    chunk = next((c for c in TL["chunks"] if c["t0"] <= t < c["t1"]), None)
+    if chunk:
+        caption(ctx, chunk, t)
     surf.flush()
     return bytes(surf.get_data())
 
@@ -1073,6 +1187,7 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
+    ensure_fonts()
     TL = build_timeline()
     nframes = int(round(TL["total"] * FPS))
     print(f"{TL['total']:.1f} s, {len(TL['shots'])} shots, {len(TL['words'])} words", file=sys.stderr)
@@ -1107,7 +1222,7 @@ def main():
     enc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                             "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
                             "-i", audio, "-c:v", "libx264", "-preset", "medium", "-crf", "19",
-                            "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-b:a", "192k",
+                            "-pix_fmt", "yuv420p", "-profile:v", "high", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000", "-c:a", "aac", "-b:a", "192k",
                             "-shortest", "-movflags", "+faststart", video], stdin=subprocess.PIPE)
     with Pool(args.workers) as pool:  # workers fork after TL is built
         for i, data in enumerate(pool.imap(render_frame, range(nframes), chunksize=3)):
