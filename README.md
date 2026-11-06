@@ -1,6 +1,8 @@
 # $1 That Doubles Every Hour: What Can You Buy?
 
-> **Also in this repo:** [`cell-io/`](cell-io/README.md) is **CELL.IO**, a multiplayer browser evolution game (TypeScript, Phaser 3, Socket.IO) where you attach organelles to your cell and their placement changes how it moves and fights. Run it with `cd cell-io && npm install && npm run dev`.
+> **Also in this repo:** [`cellio-roblox/`](cellio-roblox/README.md) is the Roblox version (open `CellIO.rbxlx` in Roblox Studio).
+>
+> [`cell-io/`](cell-io/README.md) is **CELL.IO**, a multiplayer browser evolution game (TypeScript, Phaser 3, Socket.IO) where you attach organelles to your cell and their placement changes how it moves and fights. Run it with `cd cell-io && npm install && npm run dev`.
 
 A fully procedural Blender animation, rendered automatically by GitHub Actions. Start with **$1**, double it every hour for 24 hours, and watch a 3D model of something you can now afford land in the frame each hour. It runs from a $1 lollipop to a $16.7M superyacht.
 
