@@ -5,8 +5,10 @@ Everything (the cartoon cat, backgrounds, captions, and the music bed) is
 generated in code, so there are no third-party assets to license.
 
     pip install pycairo numpy          # FFmpeg must also be installed
-    python3 make_video.py              # -> out/why-cats-make-biscuits.mp4
-    python3 make_video.py --preview    # -> out/preview.png (one frame per scene)
+    python3 make_video.py                  # -> out/why-cats-make-biscuits.mp4 (cartoon)
+    python3 make_video.py --style pixel    # pixel | whiteboard | comic | neon | all
+    python3 make_video.py --preview --style comic   # -> out/preview-comic.png
+    python3 make_video.py --compare        # -> out/styles-compare.png
 
 Output: 1080x1920 (vertical, for Shorts / Reels / TikTok), 30 fps, H.264 + AAC.
 """
@@ -59,8 +61,56 @@ def rnd(i, salt=0):
     return (math.sin(i * 12.9898 + salt * 78.233) * 43758.5453) % 1.0
 
 
-# --------------------------------------------------------------------------- drawing helpers
+# --------------------------------------------------------------------------- art styles
+# The same scenes are drawn in every style; these hooks restyle colours, lines,
+# backgrounds and text, and render_frame() adds per-style post-processing.
+STYLES = ["cartoon", "pixel", "whiteboard", "comic", "neon"]
+STYLE = "cartoon"
+INK = {"whiteboard": hexc("#1E1E24"), "comic": (0.0, 0.0, 0.0), "neon": hexc("#E8FBFF")}
+PIXEL = 6  # pixel style: scene drawn at 1/6 resolution, text at 1/3
+
+
+def set_style(name):
+    global STYLE
+    STYLE = name
+
+
+def _hsv(c):
+    import colorsys
+    return colorsys.rgb_to_hsv(*c[:3])
+
+
+def _rgb(h, s, v):
+    import colorsys
+    return colorsys.hsv_to_rgb(h, clamp(s), clamp(v))
+
+
+def neonize(c):
+    h, s, v = _hsv(c)
+    if s < 0.12:
+        return hexc("#BFF6FF")
+    return _rgb(h, s * 1.3 + 0.3, 1.0)
+
+
+def style_fill(fill, has_stroke):
+    """Map a cartoon fill colour to the current style."""
+    a = fill[3:] if len(fill) == 4 else ()
+    if STYLE == "whiteboard":
+        return tuple(x * 0.45 + 0.55 for x in fill[:3]) + a
+    if STYLE == "comic":
+        h, s, v = _hsv(fill)
+        return _rgb(h, s * 1.35, v * 1.04) + a
+    if STYLE == "neon":
+        n = neonize(fill)
+        if has_stroke:
+            return tuple(x * 0.13 for x in n) + (0.9 * (a[0] if a else 1),)
+        return n + (0.45 * (a[0] if a else 1),)
+    return fill
+
+
 def set_col(ctx, c):
+    if STYLE in INK and tuple(c[:3]) == OUTLINE:
+        c = INK[STYLE] + tuple(c[3:])
     if len(c) == 4:
         ctx.set_source_rgba(*c)
     else:
@@ -87,7 +137,14 @@ def rrect(ctx, x, y, w, h, r):
     ctx.close_path()
 
 
-def paint(ctx, fill, stroke=OUTLINE, lw=6):
+def paint(ctx, fill, stroke=OUTLINE, lw=6, raw=False):
+    if not raw and STYLE != "cartoon" and STYLE != "pixel":
+        if fill is not None:
+            if STYLE == "neon" and stroke is not None and tuple(stroke[:3]) == OUTLINE:
+                stroke = neonize(fill) + tuple(stroke[3:])
+            fill = style_fill(fill, stroke is not None)
+        if stroke is not None:
+            lw *= {"whiteboard": 1.15, "comic": 1.5, "neon": 0.9}[STYLE]
     if fill is not None:
         set_col(ctx, fill)
         if stroke is None:
@@ -178,11 +235,13 @@ def draw_cat(ctx, cx, cy, s, t, look=TABBY, eyes="happy", freq=1.4, amp=55,
     sw = math.sin(t * 2.3) * 0.25
     ctx.move_to(130, -60)
     ctx.curve_to(260, -40, 300 + 40 * sw, -200, 240 + 90 * sw, -330)
-    set_col(ctx, OUTLINE)
+    tail_line = neonize(look["fur"]) if STYLE == "neon" else OUTLINE
+    tail_fill = look["fur"] if STYLE in ("cartoon", "pixel") else style_fill(look["fur"], True)
+    set_col(ctx, tail_line)
     ctx.set_line_width(58)
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
     ctx.stroke_preserve()
-    set_col(ctx, look["fur"])
+    set_col(ctx, tail_fill)
     ctx.set_line_width(46)
     ctx.stroke()
 
@@ -322,6 +381,64 @@ def floating(ctx, t, n, salt, draw_one, x0=60, x1=W - 60, y_top=560, y_bot=1500,
 
 # --------------------------------------------------------------------------- backgrounds / props
 def background(ctx, top, bottom, t, dots=True):
+    if STYLE == "whiteboard":
+        g = cairo.LinearGradient(0, 0, W, H)
+        g.add_color_stop_rgb(0, *hexc("#FDFDFB"))
+        g.add_color_stop_rgb(1, *hexc("#EEF0F0"))
+        ctx.set_source(g)
+        ctx.paint()
+        for i in range(5):  # faint smudges from earlier drawings
+            ellipse(ctx, rnd(i, 30) * W, rnd(i, 31) * H, 160 + 120 * rnd(i, 32), 40 + 30 * rnd(i, 33), rnd(i, 34))
+            paint(ctx, (0.5, 0.55, 0.6, 0.05), None, raw=True)
+        return
+    if STYLE == "neon":
+        g = cairo.LinearGradient(0, 0, 0, H)
+        g.add_color_stop_rgb(0, *hexc("#07021A"))
+        g.add_color_stop_rgb(0.62, *hexc("#2A0B46"))
+        g.add_color_stop_rgb(1, *hexc("#0B0320"))
+        ctx.set_source(g)
+        ctx.paint()
+        for i in range(45):
+            ellipse(ctx, rnd(i, 40) * W, rnd(i, 41) * 1100, 2.5, 2.5)
+            paint(ctx, (1, 1, 1, 0.3 + 0.5 * (0.5 + 0.5 * math.sin(t * 2 + i))), None, raw=True)
+        hz = 1190  # synthwave floor grid
+        set_col(ctx, hexc("#FF3EA5", 0.55))
+        ctx.set_line_width(3)
+        for k in range(-12, 13):
+            ctx.move_to(W / 2 + k * 40, hz)
+            ctx.line_to(W / 2 + k * 260, H)
+        for k in range(12):
+            u = ((k + (t * 0.8) % 1) / 12) ** 2
+            y = hz + (H - hz) * u
+            ctx.move_to(0, y)
+            ctx.line_to(W, y)
+        ctx.stroke()
+        return
+    if STYLE == "comic":
+        top = _rgb(*(lambda h, s, v: (h, s * 1.6 + 0.15, v))(*_hsv(top)))
+        bottom = _rgb(*(lambda h, s, v: (h, s * 1.6 + 0.15, v))(*_hsv(bottom)))
+        g = cairo.LinearGradient(0, 0, 0, H)
+        g.add_color_stop_rgb(0, *top)
+        g.add_color_stop_rgb(1, *bottom)
+        ctx.set_source(g)
+        ctx.paint()
+        cx, cy = W / 2, 950  # action-line burst
+        for k in range(28):
+            a0 = k * TAU / 28 + t * 0.05
+            ctx.move_to(cx, cy)
+            ctx.line_to(cx + math.cos(a0) * 2000, cy + math.sin(a0) * 2000)
+            ctx.line_to(cx + math.cos(a0 + 0.07) * 2000, cy + math.sin(a0 + 0.07) * 2000)
+            ctx.close_path()
+        set_col(ctx, (1, 1, 1, 0.18))
+        ctx.fill()
+        for row in range(0, H, 26):  # halftone dots, bigger toward the bottom
+            r = 2 + 6 * row / H
+            for col in range(0, W, 26):
+                ctx.new_sub_path()
+                ctx.arc(col + (13 if (row // 26) % 2 else 0), row, r, 0, TAU)
+        set_col(ctx, (0, 0, 0, 0.09))
+        ctx.fill()
+        return
     g = cairo.LinearGradient(0, 0, 0, H)
     g.add_color_stop_rgb(0, *top)
     g.add_color_stop_rgb(1, *bottom)
@@ -511,11 +628,13 @@ def sc_nest(ctx, t):
         paint(ctx, (1, 1, 0.9, a), None)
     ellipse(ctx, 860, 640, 80, 80)
     paint(ctx, hexc("#FFF4C2"), None)
-    ellipse(ctx, 890, 620, 70, 70)
-    paint(ctx, hexc("#2A3664"), None)
+    ellipse(ctx, 890, 620, 70, 70)  # bite out of the moon, in the sky colour
+    sky = {"whiteboard": hexc("#F8F8F6"), "neon": hexc("#1A0730")}.get(STYLE, hexc("#2A3664"))
+    paint(ctx, sky, None, raw=True)
     base = CAT_Y + 30
     rrect(ctx, -20, base - 10, W + 40, H - base + 30, 0)
-    paint(ctx, hexc("#2E5A3A"), None)
+    ground = {"whiteboard": hexc("#DDEBDD"), "neon": hexc("#0E2A1A", 0.85)}.get(STYLE, hexc("#2E5A3A"))
+    paint(ctx, ground, None, raw=True)
     progress = ease_out(t / 5.0)
     blades = []
     for i in range(48):
@@ -620,14 +739,50 @@ TOTAL = _acc
 NFRAMES = int(round(TOTAL * FPS))
 
 
+UI = {
+    "cartoon": dict(title=WHITE, title_stroke=OUTLINE, title_lw=16, box=(1, 1, 1, 0.93), box_stroke=OUTLINE,
+                    box_r=40, text=OUTLINE, upper=False),
+    "pixel": dict(title=hexc("#FFE45C"), title_stroke=hexc("#1A1033"), title_lw=18, box=hexc("#141236", 0.94),
+                  box_stroke=WHITE, box_r=0, text=WHITE, upper=True),
+    "whiteboard": dict(title=hexc("#1F5FBF"), title_stroke=None, title_lw=0, box=hexc("#FFF27A"), box_stroke=None,
+                       box_r=6, text=OUTLINE, upper=False, tilt=-0.02),
+    "comic": dict(title=hexc("#FFE600"), title_stroke=OUTLINE, title_lw=20, box=hexc("#FFF3A8"), box_stroke=OUTLINE,
+                  box_r=0, text=OUTLINE, upper=True, shadow=True),
+    "neon": dict(title=WHITE, title_stroke=hexc("#FF3EA5"), title_lw=14, box=(0.05, 0.0, 0.12, 0.85),
+                 box_stroke=hexc("#3DF5FF"), box_r=24, text=hexc("#E8FBFF"), upper=False),
+}
+
+
+def caption_box(ctx, ui, x, y, w, h):
+    ctx.save()
+    if ui.get("tilt"):
+        ctx.translate(x + w / 2, y + h / 2)
+        ctx.rotate(ui["tilt"])
+        ctx.translate(-(x + w / 2), -(y + h / 2))
+    if STYLE == "whiteboard":  # sticky note shadow
+        rrect(ctx, x + 10, y + 14, w, h, ui["box_r"])
+        paint(ctx, (0, 0, 0, 0.12), None, raw=True)
+    rrect(ctx, x, y, w, h, ui["box_r"])
+    lw = 9 if STYLE == "comic" else 6
+    paint(ctx, ui["box"], ui["box_stroke"], lw, raw=True)
+    ctx.restore()
+
+
 def overlay(ctx, scene, t):
-    """Headline, caption card and progress bar."""
+    """Headline and caption card, styled for the current art style."""
+    ui = UI[STYLE]
+    title = scene["title"]
     pop = ease_out_back(t / 0.45)
     ctx.save()
     ctx.translate(W / 2, 330)
     ctx.scale(pop, pop)
     ctx.translate(-W / 2, -330)
-    bottom = text_block(ctx, scene["title"], W / 2, 190, 82, 940, WHITE, OUTLINE, 16)
+    if ui.get("shadow"):
+        ctx.save()
+        ctx.translate(9, 11)
+        text_block(ctx, title, W / 2, 190, 82, 940, OUTLINE, OUTLINE, ui["title_lw"])
+        ctx.restore()
+    bottom = text_block(ctx, title, W / 2, 190, 82, 940, ui["title"], ui["title_stroke"], ui["title_lw"])
     ctx.restore()
     if "punch" in scene:
         p = ease_out_back((t - 2.2) / 0.5)
@@ -637,7 +792,9 @@ def overlay(ctx, scene, t):
             ctx.scale(p, p)
             ctx.rotate(-0.04)
             ctx.translate(-W / 2, -(bottom + 70))
-            text_block(ctx, scene["punch"], W / 2, bottom + 10, 92, 980, hexc("#FFE45C"), OUTLINE, 18)
+            fill = hexc("#3DF5FF") if STYLE == "neon" else hexc("#E5484D") if STYLE == "whiteboard" else hexc("#FFE45C")
+            stroke = ui["title_stroke"] or None
+            text_block(ctx, scene["punch"], W / 2, bottom + 10, 92, 980, fill, stroke, 18)
             ctx.restore()
 
     a = ease_out((t - 0.3) / 0.45)
@@ -647,8 +804,7 @@ def overlay(ctx, scene, t):
     ctx.push_group()
     if "items" in scene:
         top, row = 1470, 105
-        rrect(ctx, 70, top + dy, W - 140, row * len(scene["items"]) + 50, 40)
-        paint(ctx, (1, 1, 1, 0.93), OUTLINE, 6)
+        caption_box(ctx, ui, 70, top + dy, W - 140, row * len(scene["items"]) + 50)
         for k, (ok, label) in enumerate(scene["items"]):
             ka = ease_out((t - 0.5 - k * 0.6) / 0.4)
             y = top + dy + 40 + k * row + 30
@@ -656,7 +812,7 @@ def overlay(ctx, scene, t):
             ctx.save()
             ctx.push_group()
             ellipse(ctx, ix, y, 30, 30)
-            paint(ctx, hexc("#4CAF50") if ok else hexc("#E5484D"), None)
+            paint(ctx, hexc("#4CAF50") if ok else hexc("#E5484D"), None, raw=True)
             set_col(ctx, WHITE)
             ctx.set_line_width(8)
             if ok:
@@ -669,9 +825,10 @@ def overlay(ctx, scene, t):
                 ctx.move_to(ix + 11, y - 11)
                 ctx.line_to(ix - 11, y + 11)
             ctx.stroke()
-            font(ctx, 39)
-            ctx.move_to(ix + 52, y + 15)
-            set_col(ctx, OUTLINE)
+            label = label.upper() if ui["upper"] else label
+            font(ctx, 39 if not ui["upper"] else 34)
+            ctx.move_to(ix + 52, y + 14)
+            set_col(ctx, ui["text"])
             ctx.show_text(label)
             ctx.pop_group_to_source()
             ctx.paint_with_alpha(ka)
@@ -680,57 +837,219 @@ def overlay(ctx, scene, t):
         font(ctx, 38, bold=False)
         ext = ctx.text_extents(scene["caption"])
         ctx.move_to(W / 2 - ext.x_advance / 2, 1810 + dy)
-        set_col(ctx, OUTLINE + (0.75,))
+        set_col(ctx, (WHITE if STYLE in ("neon",) else OUTLINE) + (0.8,))
         ctx.show_text(scene["caption"])
     else:
-        font(ctx, 50)
-        lines = wrap(ctx, scene["caption"], 880)
-        box_h = len(lines) * 62 + 70
+        text = scene["caption"].upper() if ui["upper"] else scene["caption"]
+        size = 46 if ui["upper"] else 50
+        font(ctx, size)
+        lines = wrap(ctx, text, 880)
+        box_h = len(lines) * size * 1.24 + 70
         top = 1500
-        rrect(ctx, 70, top + dy, W - 140, box_h, 40)
-        paint(ctx, (1, 1, 1, 0.93), OUTLINE, 6)
-        text_block(ctx, scene["caption"], W / 2, top + dy + 22, 50, 880, OUTLINE, line_h=1.24)
+        caption_box(ctx, ui, 70, top + dy, W - 140, box_h)
+        ctx.save()
+        if ui.get("tilt"):
+            ctx.translate(W / 2, top + dy + box_h / 2)
+            ctx.rotate(ui["tilt"])
+            ctx.translate(-W / 2, -(top + dy + box_h / 2))
+        text_block(ctx, text, W / 2, top + dy + 22, size, 880, ui["text"], line_h=1.24)
+        ctx.restore()
     ctx.pop_group_to_source()
     ctx.paint_with_alpha(a)
 
 
-def draw_scene(ctx, idx, t):
+REVEAL = 1.1  # whiteboard: seconds for the marker to "draw" a new scene
+
+
+def draw_marker(ctx, x, y):
     ctx.save()
-    SCENES[idx]["fn"](ctx, t)
-    overlay(ctx, SCENES[idx], t)
+    ctx.translate(x, y)
+    ctx.rotate(-0.7)
+    rrect(ctx, -14, -20, 28, 50, 6)
+    paint(ctx, hexc("#2B2B33"), None, raw=True)
+    rrect(ctx, -18, 20, 36, 190, 12)
+    paint(ctx, hexc("#2F6FD6"), hexc("#1E1E24"), 4, raw=True)
+    rrect(ctx, -18, 140, 36, 70, 12)
+    paint(ctx, WHITE, hexc("#1E1E24"), 4, raw=True)
     ctx.restore()
 
 
-def render_frame(i):
-    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
-    ctx = cairo.Context(surf)
-    gt = i / FPS
+def draw_scene(ctx, idx, t, layer="all"):
+    ctx.save()
+    if layer != "ui":
+        fn = SCENES[idx]["fn"]
+        if STYLE == "whiteboard" and t < REVEAL:
+            ctx.push_group()
+            fn(ctx, t)
+            pat = ctx.pop_group()
+            background(ctx, None, None, t)
+            e = ease_out(t / REVEAL) * (W + H * 0.5 + 150)
+            ctx.save()
+            ctx.move_to(0, 0)
+            ctx.line_to(e, 0)
+            ctx.line_to(e - 0.5 * H, H)
+            ctx.line_to(0, H)
+            ctx.close_path()
+            ctx.clip()
+            ctx.set_source(pat)
+            ctx.paint()
+            ctx.restore()
+            yy = H * (0.1 + 0.8 * (0.5 + 0.5 * math.sin(t * 19)))
+            draw_marker(ctx, e - 0.5 * yy, yy)
+        else:
+            fn(ctx, t)
+    if layer != "scene":
+        overlay(ctx, SCENES[idx], t)
+    ctx.restore()
+
+
+def compose(ctx, gt, layer="all"):
     idx = max(k for k, s in enumerate(STARTS) if s <= gt + 1e-9)
     t = gt - STARTS[idx]
     if idx > 0 and t < TRANS:
-        draw_scene(ctx, idx - 1, SCENES[idx - 1]["dur"] + t)
+        draw_scene(ctx, idx - 1, SCENES[idx - 1]["dur"] + t, layer)
         ctx.push_group()
-        draw_scene(ctx, idx, t)
+        draw_scene(ctx, idx, t, layer)
         ctx.pop_group_to_source()
         ctx.paint_with_alpha(ease_out(t / TRANS))
     else:
-        draw_scene(ctx, idx, t)
+        draw_scene(ctx, idx, t, layer)
+    if layer == "scene":
+        return
+    if STYLE == "comic":  # panel border
+        ctx.rectangle(0, 0, W, H)
+        ctx.rectangle(28, 28, W - 56, H - 56)
+        ctx.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        set_col(ctx, WHITE)
+        ctx.fill()
+        ctx.set_fill_rule(cairo.FILL_RULE_WINDING)
+        ctx.rectangle(28, 28, W - 56, H - 56)
+        paint(ctx, None, OUTLINE, 10, raw=True)
     # progress bar
-    rrect(ctx, 60, 70, W - 120, 14, 7)
-    paint(ctx, (1, 1, 1, 0.45), None)
-    rrect(ctx, 60, 70, max(14, (W - 120) * gt / TOTAL), 14, 7)
-    paint(ctx, OUTLINE + (0.8,), None)
+    bar_bg = (0, 0, 0, 0.1) if STYLE == "whiteboard" else (1, 1, 1, 0.25 if STYLE == "neon" else 0.45)
+    bar_fg = {"neon": hexc("#3DF5FF"), "pixel": hexc("#FFE45C")}.get(STYLE, OUTLINE)
+    rrect(ctx, 60, 70, W - 120, 14, 0 if STYLE == "pixel" else 7)
+    paint(ctx, bar_bg, None, raw=True)
+    rrect(ctx, 60, 70, max(14, (W - 120) * gt / TOTAL), 14, 0 if STYLE == "pixel" else 7)
+    paint(ctx, bar_fg + (0.9,), None, raw=True)
+
+
+def surf_array(surf):
+    h, stride = surf.get_height(), surf.get_stride()
+    return np.ndarray((h, stride // 4, 4), np.uint8, surf.get_data())[:, :surf.get_width()]
+
+
+def box_blur(a, r, axis):
+    pad = [(r + 1, r) if ax == axis else (0, 0) for ax in range(a.ndim)]
+    c = np.cumsum(np.pad(a, pad, mode="edge"), axis=axis)
+    n = c.shape[axis]
+    return (np.take(c, range(2 * r + 1, n), axis) - np.take(c, range(0, n - 2 * r - 1), axis)) / (2 * r + 1)
+
+
+def add_glow(surf, strength=0.95):
+    """Neon: blur a quarter-size copy of the frame and add it back on top."""
+    small = cairo.ImageSurface(cairo.FORMAT_ARGB32, W // 4, H // 4)
+    c = cairo.Context(small)
+    c.scale(0.25, 0.25)
+    c.set_source_surface(surf)
+    c.paint()
+    small.flush()
+    arr = surf_array(small).astype(np.float32)
+    lum = arr[..., :3].max(axis=2, keepdims=True)
+    arr[..., :3] *= np.clip((lum - 90) / 120, 0, 1)  # only bright lines glow
+    for _ in range(2):
+        arr = box_blur(box_blur(arr, 7, 0), 7, 1)
+    surf_array(small)[...] = np.clip(arr, 0, 255).astype(np.uint8)
+    small.mark_dirty()
+    c = cairo.Context(surf)
+    c.scale(4, 4)
+    c.set_source_surface(small)
+    c.get_source().set_filter(cairo.FILTER_BILINEAR)
+    c.set_operator(cairo.OPERATOR_ADD)
+    c.paint_with_alpha(strength)
+
+
+PALETTE = np.array([hexc(h) for h in (
+    "#000000 #1A1033 #3B2A4D #4A2E22 #7A4A2A #B8652F #F2A65A #FFD08A #FCE6C9 #FFFFFF #E8E3F5 #B9B4C9 "
+    "#8A84A3 #5E5A78 #C3B4E8 #9B7BE0 #F49AAE #FF5C8A #D9534F #FFB5A7 #FFD9A8 #FFF0C9 #F6C453 #FFE45C "
+    "#C8925A #7FB7E8 #4C6FA8 #1F2A55 #3C4B7A #2E5A3A #3F7A4D #6BBF59 #B9E2F5 #D7F3E8 #8E8070 #5E5246"
+).split()])[:, ::-1] * 255  # stored as BGR to match cairo's memory layout
+BAYER = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) / 16 - 0.5)
+
+
+def pixel_frame(gt):
+    """Pixel art: scene at 1/6 resolution with a fixed palette, text at 1/3, both scaled up with hard edges."""
+    sw, sh = W // PIXEL, H // PIXEL
+    s = cairo.ImageSurface(cairo.FORMAT_ARGB32, sw, sh)
+    c = cairo.Context(s)
+    c.set_antialias(cairo.ANTIALIAS_NONE)
+    c.scale(1 / PIXEL, 1 / PIXEL)
+    compose(c, gt, "scene")
+    s.flush()
+    rgb = surf_array(s)[..., :3].astype(np.float32)
+    rgb += np.tile(BAYER, (sh // 4 + 1, sw // 4 + 1))[:sh, :sw, None] * 22
+    d = ((rgb[:, :, None, :] - PALETTE[None, None]) ** 2).sum(-1)
+    q = PALETTE[d.argmin(-1)]
+    big = np.repeat(np.repeat(q, PIXEL, 0), PIXEL, 1)
+
+    u = cairo.ImageSurface(cairo.FORMAT_ARGB32, W // 3, H // 3)
+    c = cairo.Context(u)
+    c.set_antialias(cairo.ANTIALIAS_NONE)
+    fo = cairo.FontOptions()
+    fo.set_antialias(cairo.ANTIALIAS_NONE)
+    fo.set_hint_style(cairo.HINT_STYLE_FULL)
+    c.set_font_options(fo)
+    c.scale(1 / 3, 1 / 3)
+    compose(c, gt, "ui")
+    u.flush()
+    ua = np.repeat(np.repeat(surf_array(u).astype(np.float32), 3, 0), 3, 1)
+    out = ua[..., :3] + big * (1 - ua[..., 3:4] / 255)
+    frame = np.empty((H, W, 4), np.uint8)
+    frame[..., :3] = np.clip(out, 0, 255)
+    frame[..., 3] = 255
+    return frame.tobytes()
+
+
+def render_frame(i):
+    gt = i / FPS
+    if STYLE == "pixel":
+        return pixel_frame(gt)
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+    ctx = cairo.Context(surf)
+    compose(ctx, gt)
     surf.flush()
+    if STYLE == "neon":
+        add_glow(surf)
+        surf.flush()
     return bytes(surf.get_data())
 
 
 # --------------------------------------------------------------------------- music (original, synthesized)
-def make_music(path, seconds, sr=44100):
+def osc(kind, f, x):
+    """Oscillators: 'sine' (soft), 'square' / 'tri' (chiptune), 'saw' (synthwave)."""
+    ph = TAU * f * x
+    if kind == "square":
+        return np.sign(np.sin(ph)) * 0.5
+    if kind == "tri":
+        return 2 / math.pi * np.arcsin(np.sin(ph))
+    if kind == "saw":
+        return sum(np.sin(ph * k) / k for k in range(1, 7)) * 0.6
+    return np.sin(ph)
+
+
+TIMBRE = {  # pad, bass, lead, tempo, echo
+    "soft": dict(pad="sine", bass="sine", lead="sine", bpm=92, echo=0.28),
+    "chip": dict(pad=None, bass="tri", lead="square", bpm=120, echo=0.0),
+    "synth": dict(pad="saw", bass="saw", lead="saw", bpm=96, echo=0.35),
+}
+
+
+def make_music(path, seconds, timbre="soft", sr=44100):
+    tm = TIMBRE[timbre]
     n = int(seconds * sr)
     out = np.zeros(n)
     tt = np.arange(n) / sr
-    bpm = 92
-    beat = 60 / bpm
+    beat = 60 / tm["bpm"]
     chords = [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59]]  # Fmaj7 Em7 Dm7 Cmaj7
 
     def hz(m):
@@ -748,42 +1067,51 @@ def make_music(path, seconds, sr=44100):
     for b in range(nbars):
         chord = chords[b % 4]
         t0 = b * bar
-        L = int(bar * 1.15 * sr)
-        x = np.arange(L) / sr
-        env = np.minimum(1, x / 0.35) * np.exp(-x * 0.5)
-        for m in chord:  # warm pad
-            f = hz(m)
-            add(t0, 0.035 * env * (np.sin(TAU * f * x) + 0.4 * np.sin(TAU * f * 1.003 * x)
-                                   + 0.15 * np.sin(TAU * 2 * f * x)))
-        for k in (0, 2):  # bass
-            x2 = np.arange(int(beat * 1.8 * sr)) / sr
+        if tm["pad"]:
+            L = int(bar * 1.15 * sr)
+            x = np.arange(L) / sr
+            env = np.minimum(1, x / 0.35) * np.exp(-x * 0.5)
+            amp = 0.035 if tm["pad"] == "sine" else 0.018
+            for m in chord:  # pad
+                f = hz(m)
+                add(t0, amp * env * (osc(tm["pad"], f, x) + 0.4 * osc(tm["pad"], f * 1.004, x)))
+        for k in (0, 2) if timbre != "chip" else (0, 1, 2, 3):  # bass
+            x2 = np.arange(int(beat * (1.8 if timbre != "chip" else 0.9) * sr)) / sr
             add(t0 + k * beat, 0.16 * np.exp(-x2 * 2.2) * np.minimum(1, x2 / 0.01)
-                * np.sin(TAU * hz(chord[0] - 12) * x2))
+                * osc(tm["bass"], hz(chord[0] - 12), x2))
         pattern = [0, 1, 2, 3, 2, 1, 3, 2]
-        for k, p in enumerate(pattern):  # plucky arpeggio (music-box feel)
+        for k, p in enumerate(pattern):  # arpeggio
             if b == 0 and k < 4:
                 continue
             x3 = np.arange(int(0.9 * sr)) / sr
             f = hz(chord[p] + 12)
-            sig = np.minimum(1, x3 / 0.004) * (np.sin(TAU * f * x3) * np.exp(-x3 * 5)
-                                               + 0.25 * np.sin(TAU * 3 * f * x3) * np.exp(-x3 * 11))
+            if timbre == "chip":
+                sig = osc("square", f, x3) * np.exp(-x3 * 7) * 0.8
+            else:
+                sig = np.minimum(1, x3 / 0.004) * (osc(tm["lead"], f, x3) * np.exp(-x3 * 5)
+                                                   + 0.25 * np.sin(TAU * 3 * f * x3) * np.exp(-x3 * 11))
             add(t0 + k * beat / 2, 0.075 * sig)
         rng = np.random.default_rng(b)
-        for k in range(4):  # soft shaker on the off-beats
+        for k in range(4):  # off-beat shaker (a crunchier noise hat for chiptune)
             x4 = np.arange(int(0.08 * sr)) / sr
             noise = np.diff(rng.standard_normal(len(x4) + 1))
-            add(t0 + (k + 0.5) * beat, 0.012 * noise * np.exp(-x4 * 45))
-    # echo
-    d = int(0.33 * sr)
-    wet = np.zeros(n)
-    wet[d:] = out[:-d] * 0.28
-    wet[2 * d:] += out[:-2 * d] * 0.1
-    out += wet
-    # a soft "pop" at each new scene
-    for s in STARTS[1:]:
+            if timbre == "chip":
+                noise = np.sign(noise)
+            add(t0 + (k + 0.5) * beat, (0.012 if timbre != "chip" else 0.02) * noise * np.exp(-x4 * 45))
+    if tm["echo"]:
+        d = int(0.33 * sr)
+        wet = np.zeros(n)
+        wet[d:] = out[:-d] * tm["echo"]
+        wet[2 * d:] += out[:-2 * d] * tm["echo"] * 0.35
+        out += wet
+    for s in STARTS[1:]:  # a "pop" at each new scene (a coin-style blip for chiptune)
         x5 = np.arange(int(0.12 * sr)) / sr
-        f = 500 + 900 * (x5 / 0.12)
-        add(s, 0.12 * np.sin(TAU * np.cumsum(f) / sr) * np.exp(-x5 * 30))
+        if timbre == "chip":
+            f = np.where(x5 < 0.04, 988, 1319)
+            add(s, 0.1 * np.sign(np.sin(TAU * np.cumsum(f) / sr)) * np.exp(-x5 * 15))
+        else:
+            f = 500 + 900 * (x5 / 0.12)
+            add(s, 0.12 * np.sin(TAU * np.cumsum(f) / sr) * np.exp(-x5 * 30))
     fade_in = np.minimum(1, tt / 0.8)
     fade_out = np.clip((seconds - tt) / 2.0, 0, 1)
     out *= fade_in * fade_out
@@ -794,6 +1122,9 @@ def make_music(path, seconds, sr=44100):
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes(pcm.tobytes())
+
+
+STYLE_TIMBRE = {"cartoon": "soft", "pixel": "chip", "whiteboard": "soft", "comic": "soft", "neon": "synth"}
 
 
 # --------------------------------------------------------------------------- outputs
@@ -818,44 +1149,43 @@ def frame_to_png(data, path):
     surf.write_to_png(path)
 
 
-def preview(path):
-    cols = len(SCENES)
+def sheet(path, frames, labels=None):
+    """Contact sheet of quarter-size frames, given as (style, seconds) pairs."""
     tw, th = W // 4, H // 4
-    sheet = cairo.ImageSurface(cairo.FORMAT_ARGB32, tw * cols, th)
-    ctx = cairo.Context(sheet)
-    for k, s in enumerate(SCENES):
-        frame = int((STARTS[k] + min(s["dur"] - 0.3, 3.0)) * FPS)
-        img = cairo.ImageSurface.create_for_data(bytearray(render_frame(frame)), cairo.FORMAT_ARGB32, W, H)
+    img = cairo.ImageSurface(cairo.FORMAT_ARGB32, tw * len(frames), th + (60 if labels else 0))
+    ctx = cairo.Context(img)
+    set_col(ctx, WHITE)
+    ctx.paint()
+    for k, (style, sec) in enumerate(frames):
+        set_style(style)
+        fr = cairo.ImageSurface.create_for_data(bytearray(render_frame(int(sec * FPS))), cairo.FORMAT_ARGB32, W, H)
         ctx.save()
         ctx.translate(k * tw, 0)
         ctx.scale(0.25, 0.25)
-        ctx.set_source_surface(img, 0, 0)
+        ctx.set_source_surface(fr, 0, 0)
         ctx.paint()
         ctx.restore()
-    sheet.write_to_png(path)
+        if labels:
+            set_style("cartoon")
+            font(ctx, 30)
+            ext = ctx.text_extents(labels[k])
+            ctx.move_to(k * tw + (tw - ext.x_advance) / 2, th + 42)
+            set_col(ctx, OUTLINE)
+            ctx.show_text(labels[k])
+    img.write_to_png(path)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--preview", action="store_true", help="only write out/preview.png")
-    ap.add_argument("--still", type=float, help="write a single frame at this time (seconds)")
-    ap.add_argument("--workers", type=int, default=os.cpu_count())
-    args = ap.parse_args()
-    os.makedirs(OUT_DIR, exist_ok=True)
+def preview(path):
+    style = STYLE
+    sheet(path, [(style, STARTS[k] + min(s["dur"] - 0.3, 3.0)) for k, s in enumerate(SCENES)])
+    set_style(style)
 
-    if args.preview:
-        preview(os.path.join(OUT_DIR, "preview.png"))
-        print("wrote out/preview.png")
-        return
-    if args.still is not None:
-        frame_to_png(render_frame(int(args.still * FPS)), os.path.join(OUT_DIR, "still.png"))
-        print("wrote out/still.png")
-        return
 
-    audio = os.path.join(OUT_DIR, "music.wav")
-    make_music(audio, TOTAL)
-    write_srt(os.path.join(OUT_DIR, "why-cats-make-biscuits.srt"))
-    video = os.path.join(OUT_DIR, "why-cats-make-biscuits.mp4")
+def render_video(style, workers, name):
+    set_style(style)
+    audio = os.path.join(OUT_DIR, f"music-{style}.wav")
+    make_music(audio, TOTAL, STYLE_TIMBRE[style])
+    video = os.path.join(OUT_DIR, name + ".mp4")
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
            "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
            "-i", audio,
@@ -863,15 +1193,46 @@ def main():
            "-profile:v", "high", "-c:a", "aac", "-b:a", "160k", "-shortest",
            "-movflags", "+faststart", video]
     enc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    with Pool(args.workers) as pool:
+    with Pool(workers) as pool:  # workers fork after set_style, so they inherit the style
         for i, data in enumerate(pool.imap(render_frame, range(NFRAMES), chunksize=4)):
             enc.stdin.write(data)
-            if i % 150 == 0:
-                print(f"frame {i}/{NFRAMES}", file=sys.stderr)
+            if i % 300 == 0:
+                print(f"[{style}] frame {i}/{NFRAMES}", file=sys.stderr)
     enc.stdin.close()
     if enc.wait() != 0:
         sys.exit("ffmpeg failed")
     print(f"wrote {video} ({TOTAL:.1f} s, {NFRAMES} frames)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--style", default="cartoon", choices=STYLES + ["all"],
+                    help="art style (default cartoon); 'all' renders every style")
+    ap.add_argument("--preview", action="store_true", help="only write out/preview-<style>.png")
+    ap.add_argument("--compare", action="store_true", help="only write out/styles-compare.png")
+    ap.add_argument("--still", type=float, help="write a single frame at this time (seconds)")
+    ap.add_argument("--workers", type=int, default=os.cpu_count())
+    args = ap.parse_args()
+    os.makedirs(OUT_DIR, exist_ok=True)
+    styles = STYLES if args.style == "all" else [args.style]
+
+    if args.compare:
+        sheet(os.path.join(OUT_DIR, "styles-compare.png"), [(s, 3.0) for s in STYLES],
+              [s.upper() for s in STYLES])
+        print("wrote out/styles-compare.png")
+        return
+    for style in styles:
+        set_style(style)
+        if args.preview:
+            preview(os.path.join(OUT_DIR, f"preview-{style}.png"))
+            print(f"wrote out/preview-{style}.png")
+        elif args.still is not None:
+            frame_to_png(render_frame(int(args.still * FPS)), os.path.join(OUT_DIR, f"still-{style}.png"))
+            print(f"wrote out/still-{style}.png")
+        else:
+            write_srt(os.path.join(OUT_DIR, "why-cats-make-biscuits.srt"))
+            name = "why-cats-make-biscuits" + ("" if style == "cartoon" else f"-{style}")
+            render_video(style, args.workers, name)
 
 
 if __name__ == "__main__":
