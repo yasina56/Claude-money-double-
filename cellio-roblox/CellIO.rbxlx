@@ -1,0 +1,4012 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><External>null</External><External>nil</External><Item class="ReplicatedStorage" referent="RBX17"><Properties><string name="Name">ReplicatedStorage</string></Properties><Item class="Folder" referent="RBX9"><Properties><string name="Name">Shared</string></Properties><Item class="ModuleScript" referent="RBX1"><Properties><string name="Name">Config</string><ProtectedString name="Source"><![CDATA[-- Game constants. Simulation units match the web version (1 unit = 1 "pixel");
+-- the client renders at Config.STUDS_PER_UNIT so all balance numbers stay identical.
+local Config = {}
+
+Config.STUDS_PER_UNIT = 0.1
+Config.WORLD_SIZE = 4800
+Config.TICK_RATE = 30 -- simulation steps per second
+Config.SNAPSHOT_EVERY = 2 -- snapshot every N ticks (15 Hz)
+Config.NUTRIENT_EVERY = 4 -- nutrient deltas every N ticks
+
+Config.NUTRIENT_TARGET = 1600
+Config.CRYSTAL_TARGET = 24
+Config.NUTRIENT_RADIUS = 6
+Config.CRYSTAL_RADIUS = 9
+Config.CRYSTAL_XP = 8
+
+Config.START_BIOMASS = 10
+Config.MAX_BIOMASS = 2600
+Config.BIOMASS_DECAY_START = 350
+Config.BIOMASS_DECAY_RATE = 0.0025
+
+Config.SPAWN_PROTECTION = 5
+Config.EVOLVE_PROTECTION = 8
+Config.EVOLVE_COMBAT_LOCK = 1.5
+Config.EVOLVE_SLOW = 0.45
+Config.COMBAT_TIMEOUT = 4
+Config.KILL_CREDIT_WINDOW = 10
+Config.MAX_HIT_FRACTION = 0.3
+Config.PAIR_HIT_COOLDOWN = 0.35
+
+Config.DASH_COST = 28
+Config.DASH_COOLDOWN = 2.6
+Config.DASH_IMPULSE = 380
+
+Config.APEX_LEVEL = 20
+Config.MAX_LEVEL = 30
+
+function Config.radiusFromBiomass(biomass: number): number
+	return 14 + math.sqrt(math.max(0, biomass)) * 2.6
+end
+
+-- Camera height (studs) for a cell radius (units): bigger cells see more.
+function Config.cameraHeight(radius: number): number
+	return math.clamp(55 * (radius / 22) ^ 0.5, 50, 220)
+end
+
+-- Half-size of the area of interest (units) around a player for snapshots.
+function Config.viewHalfExtent(radius: number): number
+	-- FOV 70: half-height ~0.7 * height; widescreen ~1.8x wider.
+	return Config.cameraHeight(radius) / Config.STUDS_PER_UNIT * 1.3 + 250
+end
+
+return Config
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX2"><Properties><string name="Name">MathUtil</string><ProtectedString name="Source"><![CDATA[-- Small math helpers shared by server and client.
+local MathUtil = {}
+
+MathUtil.TAU = math.pi * 2
+
+function MathUtil.clamp(v: number, lo: number, hi: number): number
+	if v < lo then
+		return lo
+	elseif v > hi then
+		return hi
+	end
+	return v
+end
+
+function MathUtil.lerp(a: number, b: number, t: number): number
+	return a + (b - a) * t
+end
+
+-- Wrap an angle to (-pi, pi].
+function MathUtil.wrapAngle(a: number): number
+	a = a % MathUtil.TAU -- Luau % is floored, result in [0, TAU)
+	if a > math.pi then
+		a -= MathUtil.TAU
+	end
+	return a
+end
+
+-- Signed shortest difference b - a.
+function MathUtil.angleDiff(a: number, b: number): number
+	return MathUtil.wrapAngle(b - a)
+end
+
+function MathUtil.lerpAngle(a: number, b: number, t: number): number
+	return a + MathUtil.angleDiff(a, b) * t
+end
+
+-- Exponential soft cap: ~linear for small x, approaches `cap`.
+function MathUtil.softCap(x: number, cap: number): number
+	if x <= 0 then
+		return x
+	end
+	return cap * (1 - math.exp(-x / cap))
+end
+
+function MathUtil.isFiniteNumber(v: any): boolean
+	return typeof(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+end
+
+return MathUtil
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX3"><Properties><string name="Name">Movement</string><ProtectedString name="Source"><![CDATA[-- Movement + dash, shared by the server simulation and (optionally) client
+-- prediction. Port of cell-io/shared/sim/movement.ts.
+local Config = require(script.Parent.Config)
+local MathUtil = require(script.Parent.MathUtil)
+local Stats = require(script.Parent.Stats)
+
+local Movement = {}
+
+local function sanitize(a: any, t: any): (number, number)
+	a = if MathUtil.isFiniteNumber(a) then a else 0
+	t = if MathUtil.isFiniteNumber(t) then MathUtil.clamp(t, 0, 1) else 0
+	return a, t
+end
+Movement.sanitize = sanitize
+
+-- body: { x, y, vx, vy, heading }; input: { a, t }; mods: { slow, evolving }
+function Movement.integrate(body, stats, input, mods, hazards, dt: number)
+	local a, t = sanitize(input.a, input.t)
+	local localA = MathUtil.angleDiff(body.heading, a)
+	local facing = 0.7 + 0.3 * math.max(0, math.cos(localA))
+	local speedMult = Stats.thrustMultiplier(stats, localA) * facing
+	if mods.slow > 0 then
+		speedMult *= 1 - mods.slow
+	end
+	if mods.evolving then
+		speedMult *= Config.EVOLVE_SLOW
+	end
+	local target = stats.baseSpeed * speedMult * t
+	local dvx = math.cos(a) * target - body.vx
+	local dvy = math.sin(a) * target - body.vy
+	local dv = math.sqrt(dvx * dvx + dvy * dvy)
+	local maxDv = stats.accel * dt
+	if dv > maxDv then
+		dvx *= maxDv / dv
+		dvy *= maxDv / dv
+	end
+	body.vx += dvx
+	body.vy += dvy
+
+	local px, py = 0, 0
+	for _, h in hazards do
+		if h.kind == "current" then
+			local d = math.sqrt((body.x - h.x) ^ 2 + (body.y - h.y) ^ 2)
+			local reach = h.r + stats.radius * 0.5
+			if d <= reach then
+				local strength = h.strength * (1 - d / reach) * (22 / stats.radius) ^ 0.3
+				px += math.cos(h.dir) * strength
+				py += math.sin(h.dir) * strength
+			end
+		end
+	end
+
+	local lo = stats.radius * 0.5
+	local hi = Config.WORLD_SIZE - stats.radius * 0.5
+	body.x = MathUtil.clamp(body.x + (body.vx + px) * dt, lo, hi)
+	body.y = MathUtil.clamp(body.y + (body.vy + py) * dt, lo, hi)
+	if body.x <= lo or body.x >= hi then
+		body.vx *= -0.3
+	end
+	if body.y <= lo or body.y >= hi then
+		body.vy *= -0.3
+	end
+
+	if t > 0.05 then
+		local maxTurn = stats.turnRate * dt
+		body.heading = MathUtil.wrapAngle(body.heading + MathUtil.clamp(MathUtil.angleDiff(body.heading, a), -maxTurn, maxTurn))
+	end
+end
+
+-- Dash fires along the net propulsion layout; even layouts follow steering.
+function Movement.dashImpulse(body, stats, input, level: number): (number, number)
+	local a, t = sanitize(input.a, input.t)
+	local px, py, mag = Stats.propulsion(stats)
+	local dir, boost
+	if mag >= 0.1 then
+		dir = body.heading + math.atan2(py, px)
+		boost = 1 + 0.5 * math.min(1, mag / 0.5)
+	else
+		dir = if t > 0.05 then a else body.heading
+		boost = 1
+	end
+	local impulse = Config.DASH_IMPULSE * boost * (if level >= Config.APEX_LEVEL then 1.25 else 1) * stats.weightMult * (22 / stats.radius) ^ 0.2
+	return math.cos(dir) * impulse, math.sin(dir) * impulse
+end
+
+return Movement
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX4"><Properties><string name="Name">Organelles</string><ProtectedString name="Source"><![CDATA[-- Organelle catalogue and per-level tuning. Same numbers as the web version
+-- (cell-io/shared/organelles.ts); per-level arrays are indexed by level (1..3).
+local Organelles = {}
+
+local rad = math.rad
+
+Organelles.TYPES = { "cilia", "spikes", "stinger", "membrane", "mitochondria", "venom", "regen", "flagellum", "toxin" }
+
+Organelles.DEFS = {
+	cilia = {
+		name = "Cilia", role = "Movement", mount = "surface", span = 1, slotCost = 1, weight = 0.01, upkeep = 0.25, unlockLevel = 2,
+		color = Color3.fromRGB(184, 247, 255),
+		levelNames = { "Cilia", "Beating Cilia", "Power Cilia" },
+		levelText = { "+9% movement effectiveness", "+17% movement effectiveness", "+28% movement effectiveness" },
+		placement = "Pushes the cell away from the side it sits on. Rear = speed, sides = turning, a ring = agility.",
+	},
+	spikes = {
+		name = "Spikes", role = "Physical damage", mount = "surface", span = 1, slotCost = 1, weight = 0.02, upkeep = 0, unlockLevel = 2,
+		color = Color3.fromRGB(255, 241, 214),
+		levelNames = { "Short Spikes", "Reinforced Spikes", "Barbed Spikes" },
+		levelText = { "Contact damage where it points, scales with impact speed", "+52% spike damage", "+109% spike damage, hits cause bleeding" },
+		placement = "Only hits inside the spike's arc count. Front spikes ram; rear spikes punish chasers.",
+	},
+	stinger = {
+		name = "Stinger", role = "Venom delivery", mount = "surface", span = 1, slotCost = 1, weight = 0.01, upkeep = 0, unlockLevel = 4,
+		color = Color3.fromRGB(226, 182, 255),
+		levelNames = { "Stinger", "Hollow Stinger", "Injector" },
+		levelText = { "Small damage; delivers venom at full potency", "+30% damage, wider arc", "+60% damage, wider arc" },
+		placement = "Links to a venom sac on the same side (or a centered sac at 60%).",
+	},
+	membrane = {
+		name = "Reinforced Membrane", role = "Defense", mount = "surface", span = 3, slotCost = 2, weight = 0.06, upkeep = 0, unlockLevel = 2,
+		color = Color3.fromRGB(127, 166, 217),
+		levelNames = { "Plated Membrane", "Layered Membrane", "Chitin Shell" },
+		levelText = { "-34% damage from the covered side", "-47% damage from the covered side", "-56% damage from the covered side" },
+		placement = "Covers a ~72 degree arc. Only that side is protected. Heavy.",
+	},
+	mitochondria = {
+		name = "Mitochondria", role = "Energy", mount = "internal", span = 1, slotCost = 1, weight = 0.01, upkeep = 0, unlockLevel = 2,
+		color = Color3.fromRGB(255, 157, 77),
+		levelNames = { "Mitochondria", "Dense Mitochondria", "Hyper Mitochondria" },
+		levelText = { "+3 energy/s, +10 max energy", "+5 energy/s, +15 max energy", "+7.5 energy/s, +22 max energy" },
+		placement = "Internal. In the center it also boosts regeneration by 15%.",
+	},
+	venom = {
+		name = "Venom Sac", role = "Poison", mount = "internal", span = 1, slotCost = 2, weight = 0.02, upkeep = 0.2, unlockLevel = 4,
+		color = Color3.fromRGB(176, 77, 255),
+		levelNames = { "Venom Sac", "Paralytic Venom", "Necrotic Venom" },
+		levelText = { "Linked hits poison: 2.8 dmg/s per stack (max 3). [R] Venom surge", "4.2 dmg/s per stack, slows 15%", "5.6 dmg/s per stack, slows 25%" },
+		placement = "Needs a stinger or spike within 70 degrees of its side. No delivery, no poison.",
+	},
+	regen = {
+		name = "Regeneration Nucleus", role = "Healing", mount = "internal", span = 1, slotCost = 2, weight = 0.03, upkeep = 0, unlockLevel = 4,
+		color = Color3.fromRGB(93, 255, 154),
+		levelNames = { "Regen Nucleus", "Vital Nucleus", "Phoenix Nucleus" },
+		levelText = { "Heals 0.5% max HP/s, x3 out of combat", "Heals 0.75% max HP/s, x3 out of combat", "Heals 1.1% max HP/s, x3 out of combat" },
+		placement = "Internal. In the center slot it heals 25% more.",
+	},
+	flagellum = {
+		name = "Flagellum", role = "Directional speed", mount = "surface", span = 1, slotCost = 2, weight = 0.02, upkeep = 0.5, unlockLevel = 7,
+		color = Color3.fromRGB(255, 224, 102),
+		levelNames = { "Flagellum", "Whip Flagellum", "Turbo Flagellum" },
+		levelText = { "+35% thrust opposite its mount, -16% turning", "+45% thrust, -13% turning", "+55% thrust, -10% turning" },
+		placement = "Thrusts away from where it is attached. Rear = raw speed. Your dash follows it.",
+	},
+	toxin = {
+		name = "Toxin Gland", role = "Area defense", mount = "internal", span = 1, slotCost = 2, weight = 0.03, upkeep = 0, unlockLevel = 7,
+		color = Color3.fromRGB(198, 255, 61),
+		levelNames = { "Toxin Gland", "Caustic Gland", "Miasma Gland" },
+		levelText = { "[Q] Toxic cloud: 10 dmg/s for 6 s, slows 20%, shoves enemies out", "[Q] 13.5 dmg/s, larger cloud", "[Q] 17 dmg/s, larger cloud" },
+		placement = "Centered: the cloud surrounds you. Edge: it is projected on that side.",
+	},
+}
+
+Organelles.TUNING = {
+	ciliaEff = { 0.09, 0.17, 0.28 },
+	spikeDmg = { 11.5, 17.5, 24 },
+	spikeArc = rad(22),
+	spikeLength = { 0.35, 0.45, 0.55 },
+	stingerDmg = { 5, 6.5, 8 },
+	stingerArc = { rad(15), rad(19), rad(23) },
+	membraneReduction = { 0.34, 0.47, 0.56 },
+	membraneHalfArc = rad(36),
+	mitoRegen = { 3, 5, 7.5 },
+	mitoEnergy = { 10, 15, 22 },
+	venomDps = { 2.8, 4.2, 5.6 },
+	venomSlow = { 0, 0.15, 0.25 },
+	venomDuration = 4,
+	venomMaxStacks = 3,
+	venomCost = 5,
+	venomLinkArc = rad(70),
+	venomSurgeCost = 25,
+	venomSurgeCooldown = 10,
+	venomSurgeDuration = 3,
+	regenFrac = { 0.005, 0.0075, 0.011 },
+	regenEnergyPerSec = 1.4,
+	flagThrust = { 0.35, 0.45, 0.55 },
+	flagTurnPenalty = { 0.16, 0.13, 0.1 },
+	toxinDps = { 10, 13.5, 17 },
+	toxinSlow = 0.2,
+	toxinKnockback = 380,
+	toxinCenterReach = 0.4,
+	bumpFactor = 0.03,
+	toxinRadius = { 80, 100, 120 },
+	toxinCost = 35,
+	toxinCooldown = 13,
+	toxinDuration = 6,
+}
+
+-- Organelle integrity (spikes, stingers, membranes can break and regrow).
+Organelles.INTEGRITY = {
+	spikes = { 34, 48, 66 },
+	stinger = { 24, 32, 42 },
+	membrane = { 60, 84, 112 },
+}
+Organelles.REGROW_TIME = 12
+Organelles.INTEGRITY_HEAL = 0.04
+Organelles.SOAK = { membrane = 0.8, weapon = 0.45, chipOnArmor = 0.3 }
+
+return Organelles
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX5"><Properties><string name="Name">Placement</string><ProtectedString name="Source"><![CDATA[-- Normalized attachment system. Surface organelles sit on one of 16 snap
+-- angles (slot 0 = the cell's front, angles grow clockwise seen from above);
+-- internal organelles use one of 7 slots (center + a ring at half radius).
+-- Slot numbers are 0-based, exactly like the web version.
+local Organelles = require(script.Parent.Organelles)
+local MathUtil = require(script.Parent.MathUtil)
+
+local Placement = {}
+
+Placement.SURFACE_SLOTS = 16
+Placement.MAX_TILT = math.pi / 4
+Placement.TILT_STEP = math.pi / 12
+
+Placement.INTERNAL_SLOTS = { { r = 0, a = 0 } }
+for k = 0, 5 do
+	table.insert(Placement.INTERNAL_SLOTS, { r = 0.5, a = k * MathUtil.TAU / 6 })
+end
+
+local function internal(slot: number)
+	return Placement.INTERNAL_SLOTS[slot + 1]
+end
+Placement.internal = internal
+
+function Placement.surfaceSlotAngle(slot: number): number
+	return slot * MathUtil.TAU / Placement.SURFACE_SLOTS
+end
+
+function Placement.isSurface(t: string): boolean
+	return Organelles.DEFS[t].mount == "surface"
+end
+
+-- Local angle (relative to heading) of an organelle's attachment point.
+function Placement.angle(o): number
+	if Placement.isSurface(o.type) then
+		return Placement.surfaceSlotAngle(o.slot)
+	end
+	return internal(o.slot).a
+end
+
+-- Local direction an organelle points (attachment angle + tilt).
+function Placement.direction(o): number
+	return Placement.angle(o) + (if Placement.isSurface(o.type) then o.tilt else 0)
+end
+
+function Placement.localPos(o): (number, number)
+	if Placement.isSurface(o.type) then
+		local a = Placement.surfaceSlotAngle(o.slot)
+		return math.cos(a), math.sin(a)
+	end
+	local s = internal(o.slot)
+	return math.cos(s.a) * s.r, math.sin(s.a) * s.r
+end
+
+function Placement.snapsFor(slot: number, span: number): { number }
+	local half = math.floor(span / 2)
+	local out = {}
+	for k = -half, half do
+		table.insert(out, (slot + k) % Placement.SURFACE_SLOTS)
+	end
+	return out
+end
+
+function Placement.capacityUsed(organelles): number
+	local sum = 0
+	for _, o in organelles do
+		sum += Organelles.DEFS[o.type].slotCost
+	end
+	return sum
+end
+
+function Placement.capacityForLevel(level: number): number
+	local tbl = { 0, 0, 2, 3, 4, 4, 5, 6, 6, 7, 8 } -- index = level + 1
+	if level < #tbl then
+		return tbl[level + 1]
+	end
+	return math.min(13, 8 + math.floor((level - 10) / 2))
+end
+
+-- Returns nil when valid, else an error code: "mount" | "range" | "occupied" | "tilt" | "capacity".
+function Placement.check(organelles, t: string, slot: any, tilt: any, capacity: number): string?
+	local def = Organelles.DEFS[t]
+	if not def then
+		return "mount"
+	end
+	if typeof(slot) ~= "number" or slot ~= math.floor(slot) or not MathUtil.isFiniteNumber(tilt) then
+		return "range"
+	end
+	if Placement.capacityUsed(organelles) + def.slotCost > capacity then
+		return "capacity"
+	end
+	if def.mount == "surface" then
+		if slot < 0 or slot >= Placement.SURFACE_SLOTS then
+			return "range"
+		end
+		if math.abs(tilt) > Placement.MAX_TILT + 1e-6 then
+			return "tilt"
+		end
+		local occupied = {}
+		for _, o in organelles do
+			local d = Organelles.DEFS[o.type]
+			if d.mount == "surface" then
+				for _, s in Placement.snapsFor(o.slot, d.span) do
+					occupied[s] = true
+				end
+			end
+		end
+		for _, s in Placement.snapsFor(slot, def.span) do
+			if occupied[s] then
+				return "occupied"
+			end
+		end
+	else
+		if slot < 0 or slot >= #Placement.INTERNAL_SLOTS then
+			return "range"
+		end
+		if tilt ~= 0 then
+			return "tilt"
+		end
+		for _, o in organelles do
+			if Organelles.DEFS[o.type].mount == "internal" and o.slot == slot then
+				return "occupied"
+			end
+		end
+	end
+	return nil
+end
+
+function Placement.validSlots(organelles, t: string): { number }
+	local n = if Placement.isSurface(t) then Placement.SURFACE_SLOTS else #Placement.INTERNAL_SLOTS
+	local out = {}
+	for s = 0, n - 1 do
+		if Placement.check(organelles, t, s, 0, math.huge) == nil then
+			table.insert(out, s)
+		end
+	end
+	return out
+end
+
+-- Valid slot closest to a preferred local angle (AI and default placement).
+function Placement.nearestValidSlot(organelles, t: string, localAngle: number, preferCenter: boolean?): number?
+	local slots = Placement.validSlots(organelles, t)
+	if #slots == 0 then
+		return nil
+	end
+	local surface = Placement.isSurface(t)
+	if preferCenter and not surface and table.find(slots, 0) then
+		return 0
+	end
+	local best, bestD = slots[1], math.huge
+	for _, s in slots do
+		local d
+		if not surface and s == 0 then
+			d = math.pi * 0.9
+		else
+			d = math.abs(MathUtil.angleDiff(Placement.angle({ type = t, slot = s }), localAngle))
+		end
+		if d < bestD then
+			best, bestD = s, d
+		end
+	end
+	return best
+end
+
+return Placement
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX6"><Properties><string name="Name">Progression</string><ProtectedString name="Source"><![CDATA[-- Levels, XP curve and evolution offers (same rules as the web version).
+--  L2 first organelles, L3 more capacity, L4 tier 2, L5 upgrades to II,
+--  L7 tier 3, L10 four choices, L15 upgrades to III, L20 apex.
+local Organelles = require(script.Parent.Organelles)
+local Placement = require(script.Parent.Placement)
+
+local Progression = {}
+
+function Progression.xpToNext(level: number): number
+	return math.round(30 + 16 * (level - 1) ^ 1.4)
+end
+
+function Progression.maxOrganelleLevel(level: number): number
+	if level >= 15 then
+		return 3
+	elseif level >= 5 then
+		return 2
+	end
+	return 1
+end
+
+function Progression.offerCount(level: number): number
+	return if level >= 10 then 4 else 3
+end
+
+Progression.MUTATIONS = {
+	vitality = { name = "Vitality Mutation", text = "+10% max HP" },
+	metabolism = { name = "Metabolic Mutation", text = "+15 max energy" },
+	growth = { name = "Growth Spurt", text = "+20 biomass instantly" },
+}
+
+local function shuffle(arr, rng: Random)
+	for i = #arr, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		arr[i], arr[j] = arr[j], arr[i]
+	end
+	return arr
+end
+
+-- Offers: { kind = "new", type } | { kind = "upgrade", type, index, toLevel } | { kind = "mutation", mutation }
+-- `index` is the 1-based position in the organelle list.
+function Progression.generateOffers(level: number, organelles, rng: Random)
+	local free = Placement.capacityForLevel(level) - Placement.capacityUsed(organelles)
+	local maxLvl = Progression.maxOrganelleLevel(level)
+	local news, upgrades = {}, {}
+	for _, t in Organelles.TYPES do
+		local def = Organelles.DEFS[t]
+		if def.unlockLevel <= level and def.slotCost <= free and #Placement.validSlots(organelles, t) > 0 then
+			table.insert(news, { kind = "new", type = t })
+		end
+	end
+	for i, o in organelles do
+		if o.level < maxLvl then
+			table.insert(upgrades, { kind = "upgrade", type = o.type, index = i, toLevel = o.level + 1 })
+		end
+	end
+	shuffle(news, rng)
+	shuffle(upgrades, rng)
+	local want = Progression.offerCount(level)
+	local out = {}
+	if #news > 0 then
+		table.insert(out, table.remove(news, 1))
+	end
+	if #upgrades > 0 then
+		table.insert(out, table.remove(upgrades, 1))
+	end
+	local pool = {}
+	for _, x in news do
+		table.insert(pool, x)
+	end
+	for _, x in upgrades do
+		table.insert(pool, x)
+	end
+	shuffle(pool, rng)
+	while #out < want and #pool > 0 do
+		local nxt = table.remove(pool, 1)
+		local dup = false
+		for _, o in out do
+			if o.kind == nxt.kind and ((o.kind == "new" and o.type == nxt.type) or (o.kind == "upgrade" and o.index == nxt.index)) then
+				dup = true
+			end
+		end
+		if not dup then
+			table.insert(out, nxt)
+		end
+	end
+	local muts = shuffle({ "vitality", "metabolism", "growth" }, rng)
+	while #out < want do
+		table.insert(out, { kind = "mutation", mutation = table.remove(muts, 1) })
+	end
+	return out
+end
+
+function Progression.offerTitle(o): string
+	if o.kind == "mutation" then
+		return Progression.MUTATIONS[o.mutation].name
+	end
+	local def = Organelles.DEFS[o.type]
+	if o.kind == "upgrade" then
+		return `{def.levelNames[o.toLevel]} (Lv{o.toLevel})`
+	end
+	return def.levelNames[1]
+end
+
+return Progression
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX7"><Properties><string name="Name">Stats</string><ProtectedString name="Source"><![CDATA[-- Derives a cell's stat block from biomass, level, mutations and the
+-- PLACEMENT of its organelles: thrust, armor arcs, hit arcs, venom links and
+-- toxin emitters are all directional. Port of cell-io/shared/stats.ts.
+local Config = require(script.Parent.Config)
+local MathUtil = require(script.Parent.MathUtil)
+local Organelles = require(script.Parent.Organelles)
+local Placement = require(script.Parent.Placement)
+
+local T = Organelles.TUNING
+local softCap = MathUtil.softCap
+
+local Stats = {}
+
+function Stats.compute(biomass: number, level: number, organelles, mutations, disabled)
+	mutations = mutations or { vitality = 0, metabolism = 0 }
+	local radius = Config.radiusFromBiomass(biomass)
+	local sizeRel = radius / 22
+
+	local weight, upkeep = 0, 0
+	local energyMax = 100 + mutations.metabolism * 15
+	local mitoRegen, turnBonus, turnPenalty, accelBonus, resistance, bonusHp, regenFrac = 0, 0, 0, 0, 0, 0, 0
+	local thrust, deliveries, armor, toxins, sacs = {}, {}, {}, {}, {}
+	local centerMito, regenCentered, mitoCount = false, false, 0
+
+	for index, o in organelles do
+		if disabled and disabled[index] then
+			continue
+		end
+		local def = Organelles.DEFS[o.type]
+		local lv = math.clamp(o.level, 1, 3)
+		weight += def.weight
+		upkeep += def.upkeep
+		local at = Placement.angle(o)
+		local dir = Placement.direction(o)
+		if o.type == "cilia" then
+			local eff = T.ciliaEff[lv]
+			table.insert(thrust, { dir = dir + math.pi, amount = eff, focus = 1, isotropic = 0.35 })
+			turnBonus += eff * (0.3 + 0.6 * math.abs(math.sin(at)))
+			accelBonus += eff * 0.8
+		elseif o.type == "flagellum" then
+			table.insert(thrust, { dir = dir + math.pi, amount = T.flagThrust[lv], focus = 3, isotropic = 0 })
+			turnPenalty += T.flagTurnPenalty[lv]
+		elseif o.type == "spikes" then
+			table.insert(deliveries, { kind = "spikes", index = index, dir = dir, arc = T.spikeArc, damage = T.spikeDmg[lv], bleed = lv >= 3 })
+		elseif o.type == "stinger" then
+			table.insert(deliveries, { kind = "stinger", index = index, dir = dir, arc = T.stingerArc[lv], damage = T.stingerDmg[lv], bleed = false })
+		elseif o.type == "membrane" then
+			table.insert(armor, { index = index, dir = at, halfArc = T.membraneHalfArc, reduction = T.membraneReduction[lv] })
+			resistance += 0.03
+			bonusHp += 12 + 8 * (lv - 1)
+		elseif o.type == "mitochondria" then
+			mitoRegen += T.mitoRegen[lv]
+			energyMax += T.mitoEnergy[lv]
+			mitoCount += 1
+			if o.slot == 0 then
+				centerMito = true
+			end
+		elseif o.type == "venom" then
+			table.insert(sacs, { angle = at, centered = Placement.internal(o.slot).r == 0, level = lv })
+		elseif o.type == "regen" then
+			regenFrac += T.regenFrac[lv] * (if o.slot == 0 then 1.25 else 1)
+			if o.slot == 0 then
+				regenCentered = true
+			end
+		elseif o.type == "toxin" then
+			local s = Placement.internal(o.slot)
+			table.insert(toxins, { dir = at, offset = if s.r == 0 then 0 else 1.15, radius = T.toxinRadius[lv], dps = T.toxinDps[lv] })
+		end
+	end
+
+	-- Venom sacs link to delivery organelles on the same side.
+	for _, d in deliveries do
+		local best = nil
+		for _, sac in sacs do
+			local potency = 0
+			if sac.centered then
+				potency = 0.6
+			elseif math.abs(MathUtil.angleDiff(sac.angle, d.dir)) <= T.venomLinkArc then
+				potency = 1
+			end
+			if d.kind == "spikes" then
+				potency *= 0.6
+			end
+			if potency > 0 then
+				local v = { dps = T.venomDps[sac.level] * potency, slow = T.venomSlow[sac.level], potency = potency }
+				if not best or v.dps > best.dps then
+					best = v
+				end
+			end
+		end
+		d.venom = best
+	end
+
+	if centerMito or (regenCentered and mitoCount > 0) then
+		regenFrac *= 1.15
+	end
+
+	local weightMult = 1 - softCap(weight, 0.35)
+	local baseHp = 80 + biomass * 1.2 + bonusHp
+	local maxHp = baseHp * (1 + 0.1 * mutations.vitality)
+	if level >= Config.APEX_LEVEL then
+		maxHp *= 1.15
+	end
+
+	return {
+		radius = radius,
+		maxHp = maxHp,
+		baseSpeed = 235 * sizeRel ^ -0.45 * weightMult,
+		accel = 650 * sizeRel ^ -0.55 * (1 + softCap(accelBonus, 0.6)) * weightMult,
+		turnRate = 5.2 * sizeRel ^ -0.35 * (1 + softCap(turnBonus, 0.9)) * (1 - softCap(turnPenalty, 0.5)),
+		weightMult = weightMult,
+		energyMax = energyMax,
+		energyRegen = math.max(1, 5 + softCap(mitoRegen, 16) - upkeep),
+		resistance = softCap(resistance, 0.25),
+		regenFrac = regenFrac,
+		thrust = thrust,
+		deliveries = deliveries,
+		armor = armor,
+		toxins = toxins,
+		sizeFactor = math.min(2.6, sizeRel ^ 0.55),
+		mass = biomass * (1 + weight),
+	}
+end
+
+-- Speed multiplier for moving at localAngle (0 = straight ahead), soft-capped at +80%.
+function Stats.thrustMultiplier(stats, localAngle: number): number
+	local sum = 0
+	for _, t in stats.thrust do
+		local c = math.max(0, math.cos(localAngle - t.dir))
+		sum += t.amount * (t.isotropic + (1 - t.isotropic) * c ^ t.focus)
+	end
+	return 1 + softCap(sum, 0.8)
+end
+
+-- Damage multiplier (0..1) for a hit arriving at localAngle.
+function Stats.armorMultiplier(stats, localAngle: number): number
+	local red = 0
+	for _, a in stats.armor do
+		if math.abs(MathUtil.angleDiff(a.dir, localAngle)) <= a.halfArc then
+			red = math.max(red, a.reduction)
+		end
+	end
+	return (1 - red) * (1 - stats.resistance)
+end
+
+-- Strongest spike/stinger whose arc contains localAngle.
+function Stats.deliveryAt(stats, localAngle: number)
+	local best = nil
+	for _, d in stats.deliveries do
+		if math.abs(MathUtil.angleDiff(d.dir, localAngle)) <= d.arc and (not best or d.damage > best.damage) then
+			best = d
+		end
+	end
+	return best
+end
+
+-- Net propulsion vector (local frame) from cilia/flagellum layout.
+function Stats.propulsion(stats): (number, number, number)
+	local x, y = 0, 0
+	for _, t in stats.thrust do
+		local w = t.amount * (1 - t.isotropic)
+		x += math.cos(t.dir) * w
+		y += math.sin(t.dir) * w
+	end
+	return x, y, math.sqrt(x * x + y * y)
+end
+
+return Stats
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX8"><Properties><string name="Name">Strategy</string><ProtectedString name="Source"><![CDATA[-- Reads a cell's evolutionary strategy from its layout (placement counts).
+local MathUtil = require(script.Parent.MathUtil)
+local Placement = require(script.Parent.Placement)
+
+local Strategy = {}
+
+Strategy.COLORS = {
+	Hunter = Color3.fromRGB(255, 122, 122),
+	Tank = Color3.fromRGB(143, 180, 255),
+	Speedster = Color3.fromRGB(255, 224, 102),
+	Toxic = Color3.fromRGB(198, 255, 61),
+	Hybrid = Color3.fromRGB(217, 194, 255),
+}
+
+local function facing(o, target: number, tol: number): boolean
+	return math.abs(MathUtil.angleDiff(Placement.direction(o), target)) <= tol
+end
+
+function Strategy.classify(organelles): string?
+	if #organelles == 0 then
+		return nil
+	end
+	local s = { Hunter = 0, Tank = 0, Speedster = 0, Toxic = 0 }
+	for _, o in organelles do
+		local w = 1 + 0.25 * (o.level - 1)
+		local t = o.type
+		if t == "spikes" then
+			if facing(o, 0, math.pi / 3) then
+				s.Hunter += 2 * w
+			elseif facing(o, math.pi, math.pi / 3) then
+				s.Tank += 0.8 * w
+			else
+				s.Hunter += 0.8 * w
+			end
+		elseif t == "stinger" then
+			s.Hunter += w
+			s.Toxic += 0.6 * w
+		elseif t == "venom" then
+			s.Hunter += w
+			s.Toxic += 1.2 * w
+		elseif t == "membrane" then
+			s.Tank += 2 * w
+		elseif t == "regen" then
+			s.Tank += 1.5 * w
+			s.Toxic += 0.5 * w
+		elseif t == "mitochondria" then
+			s.Tank += 0.4 * w
+			s.Speedster += 0.5 * w
+		elseif t == "cilia" then
+			s.Speedster += w
+		elseif t == "flagellum" then
+			if math.abs(MathUtil.angleDiff(Placement.angle(o) + o.tilt, math.pi)) <= math.pi / 3 then
+				s.Speedster += 2 * w
+				s.Hunter += 0.6 * w
+			else
+				s.Speedster += 0.8 * w
+			end
+		elseif t == "toxin" then
+			s.Toxic += 2.5 * w
+		end
+	end
+	local ranked = {}
+	for k, v in s do
+		table.insert(ranked, { k, v })
+	end
+	table.sort(ranked, function(p, q)
+		return p[2] > q[2]
+	end)
+	local top, second = ranked[1], ranked[2]
+	if top[2] < 1.5 then
+		return nil
+	end
+	if second[2] > 0 and top[2] < second[2] * 1.35 then
+		return "Hybrid"
+	end
+	return top[1]
+end
+
+return Strategy
+]]></ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX18"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX12"><Properties><string name="Name">Server</string><ProtectedString name="Source"><![CDATA[-- CELL.IO server entry point: authoritative simulation + networking.
+-- Clients only send intent (steering, abilities, evolution choices); every
+-- argument is validated and rate limited here.
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TextService = game:GetService("TextService")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared.Config)
+local MathUtil = require(Shared.MathUtil)
+local Placement = require(Shared.Placement)
+local Progression = require(Shared.Progression)
+local World = require(script.World)
+local AI = require(script.AI)
+
+Players.CharacterAutoLoads = false -- players are cells, not avatars
+
+-- ------------------------------------------------------------ remotes
+local remotes = Instance.new("Folder")
+remotes.Name = "Remotes"
+local function remote(name: string, unreliable: boolean?)
+	local r = Instance.new(if unreliable then "UnreliableRemoteEvent" else "RemoteEvent")
+	r.Name = name
+	r.Parent = remotes
+	return r
+end
+local R = {
+	Play = remote("Play"),
+	Input = remote("Input", true),
+	Ability = remote("Ability"),
+	EvolveOpen = remote("EvolveOpen"),
+	EvolveClose = remote("EvolveClose"),
+	EvolveChoose = remote("EvolveChoose"),
+	Welcome = remote("Welcome"),
+	Snapshot = remote("Snapshot"),
+	Events = remote("Events"),
+	Offer = remote("Offer"),
+	EvolveResult = remote("EvolveResult"),
+	Died = remote("Died"),
+	Leaderboard = remote("Leaderboard"),
+}
+remotes.Parent = ReplicatedStorage
+
+-- ------------------------------------------------------------ rate limiting
+local function newLimiter(capacity: number, windowSeconds: number)
+	local refill = capacity / windowSeconds
+	local buckets = {}
+	Players.PlayerRemoving:Connect(function(p)
+		buckets[p] = nil
+	end)
+	return function(player: Player): boolean
+		local now = os.clock()
+		local b = buckets[player]
+		if not b then
+			b = { tokens = capacity, last = now }
+			buckets[player] = b
+		else
+			b.tokens = math.min(capacity, b.tokens + (now - b.last) * refill)
+			b.last = now
+		end
+		if b.tokens >= 1 then
+			b.tokens -= 1
+			return true
+		end
+		return false
+	end
+end
+local allowInput = newLimiter(40, 1)
+local allowAbility = newLimiter(8, 1)
+local allowEvolve = newLimiter(10, 1)
+local allowPlay = newLimiter(3, 5)
+
+-- ------------------------------------------------------------ world
+local world = World.new()
+local clients = {} -- Player -> client state
+local aiRespawn = {}
+
+for arch, n in AI.POPULATION do
+	for _ = 1, n do
+		AI.spawn(world, arch)
+	end
+end
+
+world.onDeath = function(cell, stats)
+	if cell.kind == "ai" then
+		table.insert(aiRespawn, { archetype = cell.ai.archetype, at = world.time + 3 + world:rand() * 5 })
+		return
+	end
+	for player, cl in clients do
+		if cl.cellId == cell.id then
+			cl.cellId = nil
+			cl.lastPos = { x = cell.x, y = cell.y }
+			if stats.killerId then
+				cl.spectate = { id = stats.killerId, untilTime = world.time + 3 }
+			end
+			R.Died:FireClient(player, stats)
+		end
+	end
+end
+
+local function cellOf(player: Player)
+	local cl = clients[player]
+	return cl and cl.cellId and world.cells[cl.cellId]
+end
+
+local function spawnPlayer(player: Player)
+	local cl = clients[player]
+	local old = cl.cellId and world.cells[cl.cellId]
+	if old then
+		world:removeCell(old.id)
+	end
+	local c = world:addCell("player", cl.name)
+	cl.cellId = c.id
+	cl.known = {}
+	cl.knownNutrients = {}
+	cl.nutrientsFull = true
+	cl.spectate = nil
+	R.Welcome:FireClient(player, { id = c.id, worldSize = world.size, hazards = world.hazards })
+end
+
+local function filteredName(player: Player): string
+	local name = player.DisplayName
+	local ok, result = pcall(function()
+		local f = TextService:FilterStringAsync(name, player.UserId)
+		return f:GetNonChatStringForBroadcastAsync()
+	end)
+	return string.sub(if ok then result else player.Name, 1, 20)
+end
+
+Players.PlayerAdded:Connect(function(player)
+	clients[player] = { name = filteredName(player), cellId = nil, lastPos = { x = world.size / 2, y = world.size / 2 }, known = {}, knownNutrients = {}, nutrientsFull = true }
+	R.Welcome:FireClient(player, { id = 0, worldSize = world.size, hazards = world.hazards })
+end)
+for _, p in Players:GetPlayers() do
+	clients[p] = { name = filteredName(p), cellId = nil, lastPos = { x = world.size / 2, y = world.size / 2 }, known = {}, knownNutrients = {}, nutrientsFull = true }
+end
+Players.PlayerRemoving:Connect(function(player)
+	local c = cellOf(player)
+	if c then
+		world:removeCell(c.id)
+	end
+	clients[player] = nil
+end)
+
+-- ------------------------------------------------------------ remote handlers
+R.Play.OnServerEvent:Connect(function(player)
+	if not allowPlay(player) or not clients[player] then
+		return
+	end
+	if not cellOf(player) then
+		spawnPlayer(player)
+	end
+end)
+
+R.Input.OnServerEvent:Connect(function(player, a: unknown, t: unknown)
+	if not allowInput(player) then
+		return
+	end
+	local c = cellOf(player)
+	if not c or not MathUtil.isFiniteNumber(a) or not MathUtil.isFiniteNumber(t) then
+		return
+	end
+	c.input.a = a :: number
+	c.input.t = math.clamp(t :: number, 0, 1)
+end)
+
+R.Ability.OnServerEvent:Connect(function(player, key: unknown)
+	if not allowAbility(player) then
+		return
+	end
+	local c = cellOf(player)
+	if not c then
+		return
+	end
+	if key == "dash" then
+		world:dash(c)
+	elseif key == "toxin" then
+		world:toxin(c)
+	elseif key == "venom" then
+		world:venom(c)
+	end
+end)
+
+R.EvolveOpen.OnServerEvent:Connect(function(player)
+	if not allowEvolve(player) then
+		return
+	end
+	local c = cellOf(player)
+	if not c then
+		return
+	end
+	local offers = world:openEvolution(c)
+	if offers then
+		R.Offer:FireClient(player, { offers = offers, protectedFor = c.evolveProtect })
+	end
+end)
+
+R.EvolveClose.OnServerEvent:Connect(function(player)
+	local c = cellOf(player)
+	if c then
+		world:closeEvolution(c)
+	end
+end)
+
+R.EvolveChoose.OnServerEvent:Connect(function(player, index: unknown, slot: unknown, tilt: unknown)
+	if not allowEvolve(player) then
+		return
+	end
+	local c = cellOf(player)
+	if not c then
+		return
+	end
+	local err = world:chooseEvolution(c, index, slot, if tilt == nil then 0 else tilt)
+	R.EvolveResult:FireClient(player, err == nil, err)
+	if not err and c.offers then
+		R.Offer:FireClient(player, { offers = c.offers, protectedFor = c.evolveProtect })
+	end
+end)
+
+-- ------------------------------------------------------------ snapshots
+local function flagsOf(c): number
+	local f = 0
+	if c.spawnProtect > 0 then f += 1 end
+	if c.evolving then f += 2 end
+	if c.poison.time > 0 then f += 4 end
+	if c.dashTime > 0 then f += 8 end
+	if c.kind == "ai" then f += 16 end
+	if c.regenActive then f += 32 end
+	if c.bleed.time > 0 then f += 128 end
+	if c.venomSurge > 0 then f += 256 end
+	return f
+end
+
+local function r1(v: number): number
+	return math.round(v * 10) / 10
+end
+
+local function privateState(c)
+	local hasVenom = false
+	for _, d in c.stats.deliveries do
+		if d.venom then
+			hasVenom = true
+		end
+	end
+	return {
+		hp = r1(c.hp), maxHp = math.round(c.stats.maxHp), energy = r1(c.energy), energyMax = math.round(c.stats.energyMax),
+		xp = math.floor(c.xp), xpNext = Progression.xpToNext(c.level), level = c.level, biomass = r1(c.biomass), kills = c.kills,
+		pendingEvolutions = c.pendingEvolutions, dashCd = r1(c.dashCd), toxinCd = r1(c.toxinCd), venomCd = r1(c.venomCd),
+		hasToxin = #c.stats.toxins > 0, hasVenom = hasVenom, combatLock = r1(world:combatLock(c)),
+		capacity = Placement.capacityForLevel(c.level), capacityUsed = Placement.capacityUsed(c.organelles),
+		protectedFor = r1(math.max(c.spawnProtect, c.evolveProtect)), radius = c.stats.radius,
+	}
+end
+
+local function sendSnapshot(player: Player, cl, events, sendNutrients: boolean)
+	local me = cl.cellId and world.cells[cl.cellId]
+	if not me and cl.spectate then
+		local k = world.cells[cl.spectate.id]
+		if k and k.alive and world.time < cl.spectate.untilTime then
+			cl.lastPos = { x = k.x, y = k.y }
+		else
+			cl.spectate = nil
+		end
+	end
+	local cx = if me then me.x else cl.lastPos.x
+	local cy = if me then me.y else cl.lastPos.y
+	local half = Config.viewHalfExtent(if me then me.stats.radius else 40)
+	local function inView(x: number, y: number, r: number): boolean
+		return math.abs(x - cx) < half + r and math.abs(y - cy) < half + r
+	end
+
+	local cells, infos = {}, {}
+	for _, c in world.cells do
+		if c.alive and inView(c.x, c.y, c.stats.radius * 2) then
+			table.insert(cells, { c.id, r1(c.x), r1(c.y), math.round(c.heading * 100) / 100, r1(c.stats.radius), math.round(c.hp / c.stats.maxHp * 100) / 100, flagsOf(c), math.round(c.vx), math.round(c.vy) })
+			if cl.known[c.id] ~= c.infoVersion then
+				cl.known[c.id] = c.infoVersion
+				local orgs = {}
+				for i, o in c.organelles do
+					orgs[i] = { type = o.type, level = o.level, slot = o.slot, tilt = o.tilt }
+				end
+				table.insert(infos, { id = c.id, name = c.name, hue = c.hue, level = c.level, ai = c.kind == "ai", organelles = orgs, cracks = world:crackStages(c), version = c.infoVersion })
+			end
+		end
+	end
+
+	local snap = { t = world.time, cells = cells, infos = infos, you = if me then privateState(me) else nil, clouds = {} }
+	for _, cloud in world.clouds do
+		if inView(cloud.x, cloud.y, cloud.r) then
+			table.insert(snap.clouds, { cloud.id, math.round(cloud.x), math.round(cloud.y), math.round(cloud.r), math.round(cloud.life / cloud.maxLife * 100) / 100 })
+		end
+	end
+	if sendNutrients or cl.nutrientsFull then
+		local visible, add, del = {}, {}, {}
+		world:queryNutrients(cx - half, cy - half, cx + half, cy + half, function(n)
+			visible[n.id] = true
+			if not cl.knownNutrients[n.id] then
+				table.insert(add, { n.id, math.round(n.x), math.round(n.y), n.kind })
+			end
+		end)
+		for id in cl.knownNutrients do
+			if not visible[id] then
+				table.insert(del, id)
+			end
+		end
+		cl.knownNutrients = visible
+		snap.nFull = cl.nutrientsFull
+		cl.nutrientsFull = false
+		snap.nAdd = add
+		snap.nDel = del
+	end
+	R.Snapshot:FireClient(player, snap)
+
+	local mine = {}
+	for _, ev in events do
+		local keep
+		if ev.e == "kill" then
+			keep = true
+		elseif ev.x then
+			keep = inView(ev.x, ev.y, 100)
+		else
+			local c = world.cells[ev.id]
+			keep = ev.id == cl.cellId or (c ~= nil and inView(c.x, c.y, 0))
+		end
+		if keep then
+			table.insert(mine, ev)
+		end
+	end
+	if #mine > 0 then
+		R.Events:FireClient(player, mine)
+	end
+end
+
+-- ------------------------------------------------------------ loop
+local STEP = 1 / Config.TICK_RATE
+local acc, tick, lbTimer = 0, 0, 0
+
+RunService.Heartbeat:Connect(function(dt)
+	acc = math.min(acc + dt, STEP * 4) -- never spiral after a stall
+	while acc >= STEP do
+		acc -= STEP
+		for _, c in world.cells do
+			if c.ai and c.alive then
+				AI.update(world, c, STEP)
+			end
+		end
+		world:step(STEP)
+		tick += 1
+
+		local keep = {}
+		for _, q in aiRespawn do
+			if q.at <= world.time then
+				AI.spawn(world, q.archetype)
+			else
+				table.insert(keep, q)
+			end
+		end
+		aiRespawn = keep
+
+		if tick % Config.SNAPSHOT_EVERY == 0 then
+			local events = world.events
+			world.events = {}
+			local nutrients = tick % Config.NUTRIENT_EVERY == 0
+			for player, cl in clients do
+				sendSnapshot(player, cl, events, nutrients)
+			end
+		end
+
+		lbTimer += STEP
+		if lbTimer >= 1 then
+			lbTimer = 0
+			-- Bot difficulty follows the strongest human (rises fast, eases off slowly).
+			local target = 0.15
+			for _, c in world.cells do
+				if c.kind == "player" and c.alive then
+					target = math.max(target, AI.difficultyFor(c.level, c.biomass))
+				end
+			end
+			world.aiDifficulty += (target - world.aiDifficulty) * (if target > world.aiDifficulty then 0.5 else 0.1)
+			local list = {}
+			for _, c in world.cells do
+				if c.alive then
+					table.insert(list, c)
+				end
+			end
+			table.sort(list, function(p, q)
+				return p.biomass > q.biomass
+			end)
+			local top = {}
+			for i = 1, math.min(10, #list) do
+				local c = list[i]
+				table.insert(top, { id = c.id, name = c.name, biomass = math.round(c.biomass), level = c.level, kills = c.kills })
+			end
+			R.Leaderboard:FireAllClients(top)
+		end
+	end
+end)
+
+print("CELL.IO server running")
+]]></ProtectedString></Properties><Item class="ModuleScript" referent="RBX10"><Properties><string name="Name">AI</string><ProtectedString name="Source"><![CDATA[-- AI organisms: same Cell, movement, combat and evolution rules as players.
+-- Port of cell-io/shared/sim/ai.ts + tactics.ts (layout-aware fighting).
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local MathUtil = require(Shared.MathUtil)
+local Organelles = require(Shared.Organelles)
+local Placement = require(Shared.Placement)
+local Progression = require(Shared.Progression)
+local Movement = require(Shared.Movement)
+local Stats = require(Shared.Stats)
+
+local T = Organelles.TUNING
+local angleDiff = MathUtil.angleDiff
+local clamp = MathUtil.clamp
+local PI = math.pi
+
+local AI = {}
+
+AI.POPULATION = { grazer = 6, prey = 8, predator = 4, defender = 3 }
+
+local NAMES = {
+	predator = { "Didinium", "Lacrymaria", "Coleps", "Dileptus", "Actinophrys" },
+	defender = { "Arcella", "Difflugia", "Volvox", "Heliozoa", "Radiolaria" },
+	grazer = { "Paramecium", "Euglena", "Stentor", "Vorticella", "Blepharisma" },
+	prey = { "Chlorella", "Bodo", "Monas", "Chlamydo", "Colpoda" },
+}
+
+local START = {
+	prey = { biomass = { 5, 12 }, level = { 1, 2 } },
+	grazer = { biomass = { 12, 45 }, level = { 1, 3 } },
+	predator = { biomass = { 30, 110 }, level = { 3, 7 } },
+	defender = { biomass = { 40, 130 }, level = { 4, 8 } },
+}
+
+-- Preferred organelles per archetype and the local angles they mount at.
+local BUILDS = {
+	predator = {
+		{ type = "spikes", angles = { 0, -PI / 8, PI / 8 } },
+		{ type = "flagellum", angles = { PI } },
+		{ type = "venom", angles = { 0 } },
+		{ type = "stinger", angles = { -PI / 3, PI / 3 } },
+		{ type = "cilia", angles = { PI * 0.75, -PI * 0.75 } },
+		{ type = "mitochondria", angles = { PI }, center = true },
+	},
+	defender = {
+		{ type = "membrane", angles = { 0, PI } },
+		{ type = "toxin", angles = { 0 }, center = true },
+		{ type = "regen", angles = { PI }, center = true },
+		{ type = "mitochondria", angles = { PI / 3 } },
+		{ type = "spikes", angles = { PI, PI * 0.8 } },
+	},
+	grazer = {
+		{ type = "cilia", angles = { PI, PI * 0.75, -PI * 0.75, PI / 2 } },
+		{ type = "mitochondria", angles = { 0 }, center = true },
+		{ type = "membrane", angles = { PI } },
+		{ type = "regen", angles = { 0 }, center = true },
+	},
+	prey = {
+		{ type = "cilia", angles = { PI, PI * 0.8, -PI * 0.8 } },
+		{ type = "flagellum", angles = { PI } },
+		{ type = "membrane", angles = { PI } },
+	},
+}
+
+function AI.difficultyFor(level: number, biomass: number): number
+	return clamp((level - 2) / 12 + biomass / 2400, 0, 1)
+end
+
+local function countType(c, t: string): number
+	local n = 0
+	for _, o in c.organelles do
+		if o.type == t then
+			n += 1
+		end
+	end
+	return n
+end
+
+local function findBuild(build, t: string)
+	for i, b in build do
+		if b.type == t then
+			return b, i
+		end
+	end
+	return nil, nil
+end
+
+function AI.autoEvolve(world, c)
+	local guard = 20
+	while c.pendingEvolutions > 0 and guard > 0 do
+		guard -= 1
+		local offers = world:openEvolution(c)
+		if not offers then
+			break
+		end
+		local build = BUILDS[c.ai.archetype]
+		local bestI, bestScore = 1, -math.huge
+		for i, o in offers do
+			local s
+			if o.kind == "mutation" then
+				s = if o.mutation == "vitality" then 1.5 else 1
+			else
+				local b, idx = findBuild(build, o.type)
+				local pref = if idx then 10 - idx else 0
+				if o.kind == "upgrade" then
+					s = pref * 0.8 + 1
+				else
+					local maxCount = if b then #b.angles else 1
+					local cnt = countType(c, o.type)
+					s = if cnt >= maxCount then 0.5 else pref - cnt * 1.5
+				end
+			end
+			if s > bestScore then
+				bestI, bestScore = i, s
+			end
+		end
+		local o = offers[bestI]
+		local slot = nil
+		if o.kind == "new" then
+			local b = findBuild(build, o.type)
+			local cnt = countType(c, o.type)
+			local angle = if b then b.angles[(cnt % #b.angles) + 1] else world:rand() * MathUtil.TAU
+			slot = Placement.nearestValidSlot(c.organelles, o.type, angle, b and b.center and cnt == 0)
+		end
+		if world:chooseEvolution(c, bestI, slot, 0) then
+			-- Fall back to any offer that needs no placement.
+			local alt = nil
+			for i, x in offers do
+				if x.kind ~= "new" then
+					alt = i
+				end
+			end
+			if not alt or world:chooseEvolution(c, alt, nil, 0) then
+				break
+			end
+		end
+	end
+	world:closeEvolution(c)
+end
+
+function AI.spawn(world, archetype: string)
+	local spec = START[archetype]
+	local names = NAMES[archetype]
+	local biomass = spec.biomass[1] + world:rand() * (spec.biomass[2] - spec.biomass[1])
+	local c = world:addCell("ai", names[world.rng:NextInteger(1, #names)], biomass)
+	c.hue = ({ prey = 0.28, grazer = 0.5, predator = 0.0, defender = 0.6 })[archetype] + (world:rand() - 0.5) * 0.08
+	c.ai = { archetype = archetype, think = 0, targetId = nil, wander = world:rand() * MathUtil.TAU, mode = "graze", chase = 0, rest = 0, retreatUntil = 0 }
+	local boost = math.round(world.aiDifficulty * (if archetype == "predator" or archetype == "defender" then 5 else 2))
+	local level = math.round(spec.level[1] + world:rand() * (spec.level[2] - spec.level[1])) + boost
+	while c.level < level do
+		world:addXp(c, Progression.xpToNext(c.level) - c.xp)
+	end
+	AI.autoEvolve(world, c)
+	c.hp = c.stats.maxHp
+	c.energy = c.stats.energyMax
+	return c
+end
+
+-- ------------------------------------------------------------ tactics
+
+local function readLayout(c)
+	local s = c.stats
+	local weapon, armor = nil, nil
+	for _, d in s.deliveries do
+		if not weapon or d.damage > weapon.damage then
+			weapon = d
+		end
+	end
+	for _, a in s.armor do
+		if not armor or a.reduction > armor.reduction then
+			armor = a
+		end
+	end
+	local px, py, mag = Stats.propulsion(s)
+	local pdir = math.atan2(py, px)
+	local venomLinked = false
+	for _, d in s.deliveries do
+		if d.venom then
+			venomLinked = true
+		end
+	end
+	return {
+		weapon = weapon,
+		armor = armor,
+		rearWeapon = weapon ~= nil and math.abs(angleDiff(weapon.dir, PI)) < PI / 3,
+		kiter = mag >= 0.3 and math.abs(angleDiff(pdir, 0)) < PI / 3,
+		hasToxin = #s.toxins > 0,
+		venomLinked = venomLinked,
+	}
+end
+
+local function dashAngle(c, a: number, t: number): number
+	local ix, iy = Movement.dashImpulse(c, c.stats, { a = a, t = t }, c.level)
+	return math.atan2(iy, ix)
+end
+
+local function avoidClouds(world, c, a: number, t: number, target, L): (number, number)
+	local px, py = 0, 0
+	for _, cl in world.clouds do
+		if cl.owner ~= c.id then
+			local dx, dy = c.x - cl.x, c.y - cl.y
+			local d = math.max(1, math.sqrt(dx * dx + dy * dy))
+			local edge = cl.r + c.stats.radius * 0.6 + 20 + 40 * world.aiDifficulty
+			if d < edge then
+				local w = (edge - d) / edge
+				px += dx / d * w
+				py += dy / d * w
+			end
+		end
+	end
+	if px == 0 and py == 0 then
+		return a, t
+	end
+	local gap = math.sqrt((target.x - c.x) ^ 2 + (target.y - c.y) ^ 2) - c.stats.radius - target.stats.radius
+	local toTarget = math.atan2(target.y - c.y, target.x - c.x)
+	if gap < 25 and L.weapon and math.abs(angleDiff(c.heading + L.weapon.dir, toTarget)) < 0.4 then
+		return a, t -- committed to an aimed hit
+	end
+	return math.atan2(math.sin(a) + py * 3, math.cos(a) + px * 3), 1
+end
+
+local function evade(world, c, threat, L): (number, number)
+	local dx, dy = threat.x - c.x, threat.y - c.y
+	local d = math.max(1, math.sqrt(dx * dx + dy * dy))
+	local gap = d - c.stats.radius - threat.stats.radius
+	local ang = math.atan2(dy, dx)
+	local away = ang + PI
+	if L.hasToxin and gap < (c.stats.toxins[1].radius * 0.6) then
+		world:toxin(c)
+	end
+	if L.rearWeapon and gap < 150 then
+		return away, if gap < 60 then 0.3 else 0.8 -- let the chaser run onto rear spikes
+	end
+	if L.armor and not L.kiter and gap < 90 then
+		return ang - L.armor.dir, 0.25 -- turn the plates toward the threat
+	end
+	if gap < 90 + 40 * world.aiDifficulty and c.energy > 30 and math.abs(angleDiff(dashAngle(c, away, 1), away)) < 0.8 then
+		world:dash(c)
+	end
+	return away, 1
+end
+
+local function engage(world, c, target): (number, number)
+	local L = readLayout(c)
+	local diff = world.aiDifficulty
+	local dx, dy = target.x - c.x, target.y - c.y
+	local d = math.max(1, math.sqrt(dx * dx + dy * dy))
+	local gap = d - c.stats.radius - target.stats.radius
+	local lead = clamp(d / 450, 0, 0.7)
+	local ang = math.atan2(target.y + target.vy * lead - c.y, target.x + target.vx * lead - c.x)
+	local away = ang + PI
+	local ai = c.ai
+
+	if L.kiter and target.lastHitBy == c.id and world.time - target.lastHitAt < 0.2 then
+		ai.retreatUntil = world.time + 1.1 - 0.4 * diff
+	end
+	if c.hp / c.stats.maxHp < 0.3 and target.hp / target.stats.maxHp > c.hp / c.stats.maxHp + 0.15 then
+		return evade(world, c, target, L)
+	end
+	if world.time < ai.retreatUntil then
+		if gap > 260 then
+			ai.retreatUntil = 0
+		end
+		if gap < 80 and math.abs(angleDiff(dashAngle(c, away, 1), away)) < 0.6 then
+			world:dash(c)
+		end
+		return away, 1
+	end
+	if L.hasToxin and gap < c.stats.toxins[1].radius * (0.55 + 0.25 * diff) then
+		world:toxin(c)
+	end
+	if not L.weapon then
+		if L.hasToxin then
+			local ready = c.toxinCd <= 0 and c.energy >= T.toxinCost
+			local closing = -((target.vx - c.vx) * dx + (target.vy - c.vy) * dy) / d
+			if ready and closing > 30 then
+				return (if L.armor then ang - L.armor.dir else ang), 0.15
+			elseif ready then
+				return ang, 1
+			end
+			if L.armor and gap < 120 then
+				return ang - L.armor.dir, 0.2
+			end
+			return away, if gap < 160 then 0.9 else 0.3
+		end
+		if L.armor and gap < 180 then
+			return ang - L.armor.dir, 0.2
+		end
+		return away, if gap < 250 then 1 else 0.4
+	end
+	if L.rearWeapon and gap < 280 then
+		local closing = -((target.vx - c.vx) * dx + (target.vy - c.vy) * dy) / d
+		return ang - L.weapon.dir, if closing > 40 and gap < 140 then 0.25 else 0.7
+	end
+	-- Read the target's layout: hover outside a ready toxin gland, flank its armor.
+	local theirs = readLayout(target)
+	local charging = theirs.weapon ~= nil and gap < 140 and math.abs(angleDiff(target.heading + theirs.weapon.dir, ang + PI)) < 0.5
+	if theirs.hasToxin and not charging and target.toxinCd <= 0.5 and target.energy >= T.toxinCost and gap < 150 + 60 * diff then
+		return ang + (if gap < 110 then 2.2 else 1.6) * (if c.id % 2 == 1 then 1 else -1), 1
+	end
+	local aim = ang
+	if theirs.armor and gap > 30 then
+		local rel = angleDiff(target.heading + theirs.armor.dir, ang + PI)
+		if math.abs(rel) < T.membraneHalfArc + 0.2 then
+			aim = ang + (if rel > 0 then -1 else 1) * (0.5 + 0.4 * diff) * math.min(1, gap / 120)
+		end
+	end
+	local a = aim - L.weapon.dir
+	local aligned = math.abs(angleDiff(c.heading + L.weapon.dir, ang)) < 0.35
+	if L.venomLinked and aligned and gap < 200 and c.energy > T.venomSurgeCost + 20 then
+		world:venom(c)
+	end
+	if aligned and gap < 110 + 70 * diff and c.energy > 40 and math.abs(angleDiff(dashAngle(c, a, 1), ang)) < 0.4 then
+		if world:rand() < 0.5 + 0.5 * diff then
+			world:dash(c)
+		end
+	end
+	return a, 1
+end
+
+local function threatLevel(self, other): number
+	local armed = if #other.stats.deliveries > 0 then 1.3 else 1
+	return (other.stats.radius / self.stats.radius) * armed * (if other.level >= self.level then 1.1 else 0.9)
+end
+
+function AI.update(world, c, dt: number)
+	local ai = c.ai
+	if c.pendingEvolutions > 0 then
+		AI.autoEvolve(world, c)
+	end
+	local diff = world.aiDifficulty
+	ai.think -= dt
+	if ai.mode == "hunt" then
+		ai.chase += dt
+	end
+	ai.rest = math.max(0, ai.rest - dt)
+	if ai.chase > 6 + 5 * diff then
+		ai.chase = 0
+		ai.rest = 7 - 4 * diff
+		ai.targetId = nil
+	end
+	if ai.think > 0 then
+		return
+	end
+	ai.think = 0.32 - 0.18 * diff + world:rand() * 0.1
+
+	local R = c.stats.radius
+	local sense = 420 + R * 3
+	local fx, fy = 0, 0
+	local closestThreat, closestD = nil, math.huge
+	local prey, preyScore = nil, -math.huge
+	for _, o in world.cells do
+		if o ~= c and o.alive then
+			local dx, dy = o.x - c.x, o.y - c.y
+			local d = math.sqrt(dx * dx + dy * dy)
+			if d <= sense and d > 0 then
+				local gap = d - R - o.stats.radius
+				local threat = threatLevel(c, o)
+				local fearful = ({ prey = 0.9, grazer = 1.05, defender = 1.6, predator = 1.35 })[ai.archetype]
+				if threat > fearful and gap < 260 + o.stats.radius then
+					local w = threat / math.max(30, gap) * 100
+					fx -= dx / d * w
+					fy -= dy / d * w
+					if gap < closestD then
+						closestD, closestThreat = gap, o
+					end
+				end
+				local grace = o.kind == "player" and o.level <= 2
+				if ai.archetype == "predator" and ai.rest <= 0 and not grace and o.spawnProtect <= 0 and o.evolveProtect <= 0 and o.stats.radius < R * 1.3 then
+					local score = -gap * 0.01 - o.hp / math.max(1, o.stats.maxHp) - #o.stats.armor * 0.3 + (if o.id == ai.targetId then 0.5 else 0)
+					if score > preyScore then
+						preyScore, prey = score, o
+					end
+				end
+			end
+		end
+	end
+
+	-- Avoid acid pools and walls.
+	local ax, ay = 0, 0
+	for _, h in world.hazards do
+		if h.kind == "acid" then
+			local dx, dy = c.x - h.x, c.y - h.y
+			local d = math.max(1, math.sqrt(dx * dx + dy * dy))
+			if d < h.r + R + 90 then
+				ax += dx / d * 2
+				ay += dy / d * 2
+			end
+		end
+	end
+	local m = 150 + R
+	if c.x < m then
+		ax += 1.5
+	end
+	if c.y < m then
+		ay += 1.5
+	end
+	if c.x > world.size - m then
+		ax -= 1.5
+	end
+	if c.y > world.size - m then
+		ay -= 1.5
+	end
+
+	local lowHp = c.hp < c.stats.maxHp * 0.35
+	local a, t
+	local L = readLayout(c)
+	local standGround = closestThreat and closestD < 120 and not lowHp and (L.rearWeapon or (ai.archetype == "defender" and L.armor))
+	if closestThreat and (ai.archetype ~= "predator" or lowHp or closestD < 60) then
+		ai.mode = "flee"
+		if closestD < 150 then
+			if standGround then
+				a, t = engage(world, c, closestThreat)
+			else
+				a, t = evade(world, c, closestThreat, L)
+			end
+			a, t = avoidClouds(world, c, a, t, closestThreat, L)
+		else
+			a, t = math.atan2(fy, fx), 1
+		end
+	elseif prey and not lowHp then
+		if ai.targetId ~= prey.id then
+			ai.chase = 0
+		end
+		ai.mode = "hunt"
+		ai.targetId = prey.id
+		a, t = engage(world, c, prey)
+		a, t = avoidClouds(world, c, a, t, prey, L)
+	else
+		ai.mode = "graze"
+		local best, bestScore = nil, math.huge
+		local range = 260 + R * 2
+		world:queryNutrients(c.x - range, c.y - range, c.x + range, c.y + range, function(n)
+			local s = math.sqrt((n.x - c.x) ^ 2 + (n.y - c.y) ^ 2) / (if n.kind == 5 then 4 else 1)
+			if s < bestScore then
+				best, bestScore = n, s
+			end
+		end)
+		if best then
+			a = math.atan2(best.y - c.y, best.x - c.x)
+		else
+			ai.wander += (world:rand() - 0.5) * 0.8
+			a = ai.wander
+		end
+		t = if ai.archetype == "defender" then 0.55 else 0.8
+	end
+	-- Blend in hazard / wall avoidance.
+	local dirX, dirY = math.cos(a) + ax, math.sin(a) + ay
+	c.input.a = math.atan2(dirY, dirX)
+	c.input.t = t
+end
+
+return AI
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX11"><Properties><string name="Name">World</string><ProtectedString name="Source"><![CDATA[-- Authoritative simulation for one arena. Port of cell-io/shared/sim/world.ts.
+-- No networking here: the server entry script drives it and serializes state.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared.Config)
+local MathUtil = require(Shared.MathUtil)
+local Organelles = require(Shared.Organelles)
+local Placement = require(Shared.Placement)
+local Progression = require(Shared.Progression)
+local Stats = require(Shared.Stats)
+local Movement = require(Shared.Movement)
+
+local T = Organelles.TUNING
+local angleDiff = MathUtil.angleDiff
+local clamp = MathUtil.clamp
+local TAU = MathUtil.TAU
+
+local World = {}
+World.__index = World
+
+local GRID = 120 -- nutrient grid cell size (units)
+
+function World.new()
+	local self = setmetatable({}, World)
+	self.size = Config.WORLD_SIZE
+	self.time = 0
+	self.nextId = 1
+	self.cells = {} -- id -> cell
+	self.nutrients = {} -- id -> nutrient
+	self.grid = {} -- key -> { [id] = nutrient }
+	self.crystalCount = 0
+	self.nutrientCount = 0
+	self.clouds = {}
+	self.hazards = {}
+	self.events = {}
+	self.blooms = {}
+	self.aiDifficulty = 0.2
+	self.rng = Random.new()
+	self.onDeath = function(_cell, _stats) end
+	self:createHazards()
+	for _ = 1, 36 do
+		table.insert(self.blooms, { x = self.rng:NextNumber() * self.size, y = self.rng:NextNumber() * self.size })
+	end
+	for _ = 1, Config.NUTRIENT_TARGET do
+		self:spawnNutrient(false)
+	end
+	for _ = 1, Config.CRYSTAL_TARGET do
+		self:spawnNutrient(true)
+	end
+	return self
+end
+
+function World:id(): number
+	local id = self.nextId
+	self.nextId += 1
+	return id
+end
+
+function World:rand(): number
+	return self.rng:NextNumber()
+end
+
+-- ------------------------------------------------------------ setup
+
+function World:createHazards()
+	for _ = 1, 7 do
+		table.insert(self.hazards, { kind = "acid", x = 400 + self:rand() * (self.size - 800), y = 400 + self:rand() * (self.size - 800), r = 110 + self:rand() * 110 })
+	end
+	for _ = 1, 5 do
+		table.insert(self.hazards, {
+			kind = "current",
+			x = 400 + self:rand() * (self.size - 800),
+			y = 400 + self:rand() * (self.size - 800),
+			r = 260 + self:rand() * 200,
+			dir = self:rand() * TAU,
+			strength = 70 + self:rand() * 50,
+		})
+	end
+end
+
+local function gridKey(x: number, y: number): number
+	return math.floor(x / GRID) * 1000 + math.floor(y / GRID)
+end
+
+function World:queryNutrients(x0: number, y0: number, x1: number, y1: number, fn)
+	for gx = math.floor(math.max(0, x0) / GRID), math.floor(math.min(self.size, x1) / GRID) do
+		for gy = math.floor(math.max(0, y0) / GRID), math.floor(math.min(self.size, y1) / GRID) do
+			local bucket = self.grid[gx * 1000 + gy]
+			if bucket then
+				for _, n in bucket do
+					fn(n)
+				end
+			end
+		end
+	end
+end
+
+function World:spawnNutrient(crystal: boolean, at, spread: number?)
+	local x, y
+	if at then
+		local a = self:rand() * TAU
+		local d = math.sqrt(self:rand()) * (spread or 0)
+		x, y = at.x + math.cos(a) * d, at.y + math.sin(a) * d
+	elseif crystal and self:rand() < 0.65 then
+		-- Rare resources sit on the rims of acid pools.
+		local acids = {}
+		for _, h in self.hazards do
+			if h.kind == "acid" then
+				table.insert(acids, h)
+			end
+		end
+		local h = acids[self.rng:NextInteger(1, #acids)]
+		local a = self:rand() * TAU
+		local d = h.r * (0.5 + self:rand() * 0.8)
+		x, y = h.x + math.cos(a) * d, h.y + math.sin(a) * d
+	elseif not crystal and self:rand() < 0.45 then
+		local b = self.blooms[self.rng:NextInteger(1, #self.blooms)]
+		local a = self:rand() * TAU
+		local d = math.sqrt(self:rand()) * 220
+		x, y = b.x + math.cos(a) * d, b.y + math.sin(a) * d
+	else
+		x, y = self:rand() * self.size, self:rand() * self.size
+	end
+	x = clamp(x, 20, self.size - 20)
+	y = clamp(y, 20, self.size - 20)
+	local n = if crystal
+		then { id = self:id(), x = x, y = y, kind = 5, value = 2, xp = Config.CRYSTAL_XP }
+		else { id = self:id(), x = x, y = y, kind = self.rng:NextInteger(0, 4), value = 1, xp = 1 }
+	if crystal then
+		self.crystalCount += 1
+	else
+		self.nutrientCount += 1
+	end
+	self.nutrients[n.id] = n
+	local key = gridKey(x, y)
+	local bucket = self.grid[key]
+	if not bucket then
+		bucket = {}
+		self.grid[key] = bucket
+	end
+	bucket[n.id] = n
+	return n
+end
+
+function World:removeNutrient(n)
+	self.nutrients[n.id] = nil
+	local bucket = self.grid[gridKey(n.x, n.y)]
+	if bucket then
+		bucket[n.id] = nil
+	end
+	if n.kind == 5 then
+		self.crystalCount -= 1
+	else
+		self.nutrientCount -= 1
+	end
+end
+
+-- Spawn far from bigger armed cells and away from acid.
+function World:findSpawnPoint(radius: number)
+	local best, bestScore = { x = self.size / 2, y = self.size / 2 }, -math.huge
+	for _ = 1, 24 do
+		local p = { x = 150 + self:rand() * (self.size - 300), y = 150 + self:rand() * (self.size - 300) }
+		local score = 1e6
+		for _, c in self.cells do
+			if c.stats.radius >= radius * 1.05 or #c.stats.deliveries > 0 then
+				score = math.min(score, math.sqrt((c.x - p.x) ^ 2 + (c.y - p.y) ^ 2) - c.stats.radius)
+			end
+		end
+		for _, h in self.hazards do
+			if h.kind == "acid" and math.sqrt((h.x - p.x) ^ 2 + (h.y - p.y) ^ 2) < h.r + 80 then
+				score -= 2000
+			end
+		end
+		if score > bestScore then
+			best, bestScore = p, score
+		end
+	end
+	return best
+end
+
+-- ------------------------------------------------------------ cells
+
+function World:refreshStats(c)
+	-- Keep integrity aligned with the layout; growth scales max integrity.
+	local radius = Config.radiusFromBiomass(c.biomass)
+	for i, o in c.organelles do
+		local base = Organelles.INTEGRITY[o.type]
+		local max = if base then base[math.clamp(o.level, 1, 3)] * math.sqrt(radius / 22) else 0
+		local h = c.orgHealth[i]
+		if not h then
+			c.orgHealth[i] = { hp = max, max = max, regrow = 0 }
+		elseif h.max ~= max then
+			h.hp = if h.max > 0 then h.hp / h.max * max else max
+			h.max = max
+		end
+	end
+	local disabled = {}
+	for i, h in c.orgHealth do
+		disabled[i] = h.regrow > 0
+	end
+	local oldMax = if c.stats then c.stats.maxHp else 0
+	c.stats = Stats.compute(c.biomass, c.level, c.organelles, c.mutations, disabled)
+	local delta = c.stats.maxHp - oldMax
+	if c.hp and delta > 0 then
+		c.hp += delta
+	end
+	c.hp = math.min(c.hp or c.stats.maxHp, c.stats.maxHp)
+	c.energy = math.min(c.energy or c.stats.energyMax, c.stats.energyMax)
+end
+
+function World:addCell(kind: string, name: string, biomass: number?)
+	local p = self:findSpawnPoint(30)
+	local c = {
+		id = self:id(),
+		kind = kind,
+		name = name,
+		hue = self:rand(),
+		alive = true,
+		x = p.x,
+		y = p.y,
+		vx = 0,
+		vy = 0,
+		heading = self:rand() * TAU,
+		biomass = biomass or Config.START_BIOMASS,
+		xp = 0,
+		level = 1,
+		organelles = {},
+		orgHealth = {},
+		mutations = { vitality = 0, metabolism = 0 },
+		infoVersion = 1,
+		crackKey = "",
+		input = { a = 0, t = 0 },
+		dashCd = 0,
+		dashTime = 0,
+		toxinCd = 0,
+		venomCd = 0,
+		venomSurge = 0,
+		cloudSlow = 0,
+		poison = { stacks = 0, time = 0, dps = 0, slow = 0, source = 0 },
+		bleed = { time = 0, dps = 0, source = 0 },
+		spawnProtect = if kind == "player" then Config.SPAWN_PROTECTION else 0,
+		evolveProtect = 0,
+		evolveProtectGranted = false,
+		evolving = false,
+		pendingEvolutions = 0,
+		offers = nil,
+		lastHitBy = nil,
+		lastHitAt = -1e9,
+		lastHitKind = "",
+		lastCombatAt = -1e9,
+		regenActive = false,
+		pairCooldown = {},
+		kills = 0,
+		bornAt = self.time,
+		biomassCollected = 0,
+		peakBiomass = biomass or Config.START_BIOMASS,
+	}
+	self:refreshStats(c)
+	c.hp = c.stats.maxHp
+	c.energy = c.stats.energyMax
+	self.cells[c.id] = c
+	return c
+end
+
+function World:removeCell(id: number)
+	self.cells[id] = nil
+	for _, c in self.cells do
+		c.pairCooldown[id] = nil
+	end
+end
+
+function World:pushEvent(ev)
+	table.insert(self.events, ev)
+end
+
+-- ------------------------------------------------------------ abilities
+
+function World:dash(c): boolean
+	if not c.alive or c.dashCd > 0 or c.energy < Config.DASH_COST then
+		return false
+	end
+	local ix, iy = Movement.dashImpulse(c, c.stats, c.input, c.level)
+	c.vx += ix
+	c.vy += iy
+	c.energy -= Config.DASH_COST
+	c.dashCd = Config.DASH_COOLDOWN * (if c.level >= Config.APEX_LEVEL then 0.7 else 1)
+	c.dashTime = 0.45
+	self:pushEvent({ e = "dash", id = c.id })
+	return true
+end
+
+function World:toxin(c): boolean
+	if not c.alive or #c.stats.toxins == 0 or c.toxinCd > 0 or c.energy < T.toxinCost then
+		return false
+	end
+	if c.evolveProtect > 0 or c.spawnProtect > 0 then
+		return false
+	end
+	c.energy -= T.toxinCost
+	c.toxinCd = T.toxinCooldown
+	for _, t in c.stats.toxins do
+		local a = c.heading + t.dir
+		local x = c.x + math.cos(a) * c.stats.radius * t.offset
+		local y = c.y + math.sin(a) * c.stats.radius * t.offset
+		local r = t.radius + c.stats.radius * (if t.offset == 0 then T.toxinCenterReach else 0.5)
+		table.insert(self.clouds, { id = self:id(), owner = c.id, x = x, y = y, r = r, dps = t.dps, life = T.toxinDuration, maxLife = T.toxinDuration })
+		self:pushEvent({ e = "toxin", id = c.id, x = x, y = y })
+		-- Release burst: shove enemies inside outward (less for heavy cells).
+		for _, o in self.cells do
+			if o ~= c and o.alive and o.spawnProtect <= 0 then
+				local dx, dy = o.x - x, o.y - y
+				local d = math.sqrt(dx * dx + dy * dy)
+				local reach = r + o.stats.radius * 0.6
+				if d < reach then
+					local k = T.toxinKnockback * (1 - d / reach) * (22 / o.stats.radius) ^ 0.35
+					local nx = if d > 1 then dx / d else math.cos(c.heading)
+					local ny = if d > 1 then dy / d else math.sin(c.heading)
+					o.vx += nx * k
+					o.vy += ny * k
+				end
+			end
+		end
+	end
+	return true
+end
+
+function World:venom(c): boolean
+	if not c.alive or c.venomCd > 0 or c.energy < T.venomSurgeCost then
+		return false
+	end
+	local linked = false
+	for _, d in c.stats.deliveries do
+		if d.venom then
+			linked = true
+		end
+	end
+	if not linked then
+		return false
+	end
+	c.energy -= T.venomSurgeCost
+	c.venomCd = T.venomSurgeCooldown
+	c.venomSurge = T.venomSurgeDuration
+	self:pushEvent({ e = "venom", id = c.id })
+	return true
+end
+
+-- ------------------------------------------------------------ organelle damage
+
+local function crackStage(h): number
+	if not h or h.max <= 0 then
+		return 0
+	end
+	if h.regrow > 0 then
+		return 3
+	end
+	local f = h.hp / h.max
+	return if f > 0.66 then 0 elseif f > 0.33 then 1 else 2
+end
+
+function World:crackStages(c): { number }
+	local out = {}
+	for i, h in c.orgHealth do
+		out[i] = crackStage(h)
+	end
+	return out
+end
+
+function World:publishCracks(c)
+	local key = table.concat(self:crackStages(c), "")
+	if key ~= c.crackKey then
+		c.crackKey = key
+		c.infoVersion += 1
+	end
+end
+
+function World:damageOrganelle(c, index: number, amount: number)
+	local h = c.orgHealth[index]
+	if not h or h.max <= 0 or h.regrow > 0 or amount <= 0 or c.spawnProtect > 0 then
+		return
+	end
+	if c.evolveProtect > 0 then
+		amount *= 0.3
+	end
+	h.hp -= amount
+	if h.hp <= 0 then
+		h.hp = 0
+		h.regrow = Organelles.REGROW_TIME
+		self:refreshStats(c)
+		self:pushEvent({ e = "break", id = c.id, x = c.x, y = c.y, type = c.organelles[index].type })
+	end
+	self:publishCracks(c)
+end
+
+local function coversAngle(o, localAngle: number): boolean
+	if o.type == "membrane" then
+		return math.abs(angleDiff(Placement.angle(o), localAngle)) <= T.membraneHalfArc
+	elseif o.type == "spikes" then
+		return math.abs(angleDiff(Placement.direction(o), localAngle)) <= T.spikeArc + 0.15
+	elseif o.type == "stinger" then
+		return math.abs(angleDiff(Placement.direction(o), localAngle)) <= T.stingerArc[o.level] + 0.15
+	end
+	return false
+end
+
+-- ------------------------------------------------------------ evolution
+
+function World:combatLock(c): number
+	return math.max(0, Config.EVOLVE_COMBAT_LOCK - (self.time - c.lastCombatAt))
+end
+
+function World:openEvolution(c)
+	if not c.alive or c.pendingEvolutions <= 0 then
+		return nil
+	end
+	if self:combatLock(c) > 0 then
+		return nil -- queued until the cell has disengaged
+	end
+	if not c.offers then
+		c.offers = Progression.generateOffers(c.level, c.organelles, self.rng)
+	end
+	c.evolving = true
+	if not c.evolveProtectGranted then
+		c.evolveProtectGranted = true
+		c.evolveProtect = Config.EVOLVE_PROTECTION
+	end
+	return c.offers
+end
+
+function World:closeEvolution(c)
+	c.evolving = false
+	c.evolveProtect = 0
+end
+
+-- Validates and applies a choice. Returns an error string or nil.
+function World:chooseEvolution(c, index: any, slot: any, tilt: any): string?
+	if not c.alive or c.pendingEvolutions <= 0 or not c.offers then
+		return "no evolution pending"
+	end
+	if typeof(index) ~= "number" or index ~= math.floor(index) then
+		return "invalid offer"
+	end
+	local offer = c.offers[index]
+	if not offer then
+		return "invalid offer"
+	end
+	if offer.kind == "new" then
+		local tl = if MathUtil.isFiniteNumber(tilt) then tilt else 0
+		if Placement.isSurface(offer.type) then
+			tl = clamp(math.round(tl / Placement.TILT_STEP) * Placement.TILT_STEP, -Placement.MAX_TILT, Placement.MAX_TILT)
+		else
+			tl = 0
+		end
+		local err = Placement.check(c.organelles, offer.type, slot, tl, Placement.capacityForLevel(c.level))
+		if err then
+			return "invalid placement: " .. err
+		end
+		table.insert(c.organelles, { type = offer.type, level = 1, slot = slot, tilt = tl })
+	elseif offer.kind == "upgrade" then
+		local o = c.organelles[offer.index]
+		if not o or o.type ~= offer.type or o.level >= Progression.maxOrganelleLevel(c.level) then
+			return "invalid upgrade"
+		end
+		o.level = math.min(3, o.level + 1)
+	elseif offer.mutation == "growth" then
+		self:addBiomass(c, 20)
+	else
+		c.mutations[offer.mutation] += 1
+	end
+	c.pendingEvolutions -= 1
+	c.offers = nil
+	c.evolveProtectGranted = false
+	c.infoVersion += 1
+	self:refreshStats(c)
+	if c.pendingEvolutions > 0 then
+		self:openEvolution(c)
+	else
+		c.evolving = false
+		c.evolveProtect = 0
+	end
+	return nil
+end
+
+-- ------------------------------------------------------------ progression
+
+function World:addXp(c, xp: number)
+	c.xp += xp
+	while c.level < Config.MAX_LEVEL and c.xp >= Progression.xpToNext(c.level) do
+		c.xp -= Progression.xpToNext(c.level)
+		c.level += 1
+		c.pendingEvolutions += 1
+		c.infoVersion += 1
+		self:pushEvent({ e = "level", id = c.id, level = c.level })
+		if c.level == Config.APEX_LEVEL then
+			self:refreshStats(c)
+		end
+	end
+end
+
+function World:addBiomass(c, amount: number)
+	local before = c.biomass
+	c.biomass = math.min(Config.MAX_BIOMASS, c.biomass + amount)
+	c.biomassCollected += c.biomass - before
+	c.peakBiomass = math.max(c.peakBiomass, c.biomass)
+	self:refreshStats(c)
+end
+
+-- ------------------------------------------------------------ damage
+
+function World:damage(target, amount: number, source, kind: string, x: number, y: number, blocked: boolean)
+	if not target.alive or amount <= 0 or target.spawnProtect > 0 then
+		return
+	end
+	if target.evolveProtect > 0 then
+		amount *= 0.3
+	end
+	local direct = kind ~= "dot" and kind ~= "acid" and kind ~= "toxin"
+	if direct then
+		amount = math.min(amount, target.stats.maxHp * Config.MAX_HIT_FRACTION)
+	end
+	target.hp -= amount
+	target.lastCombatAt = self.time
+	target.lastHitKind = kind
+	local sourceId = if typeof(source) == "table" then source.id elseif typeof(source) == "number" then source else nil
+	if sourceId then
+		target.lastHitBy = sourceId
+		target.lastHitAt = self.time
+		local src = self.cells[sourceId]
+		if src then
+			src.lastCombatAt = self.time
+		end
+	end
+	if direct then
+		self:pushEvent({ e = "hit", x = x, y = y, target = target.id, source = sourceId or 0, amount = math.round(amount), kind = kind, blocked = blocked })
+	else
+		target.dotAccum = (target.dotAccum or 0) + amount
+	end
+end
+
+-- Attacker strikes defender along unit normal (nx, ny) from att to def.
+function World:resolveHit(att, def, nx: number, ny: number, closing: number): boolean
+	if att.spawnProtect > 0 or att.evolveProtect > 0 or def.spawnProtect > 0 then
+		return false
+	end
+	local contactAtt = angleDiff(att.heading, math.atan2(ny, nx))
+	local contactDef = angleDiff(def.heading, math.atan2(-ny, -nx))
+	local armor = Stats.armorMultiplier(def.stats, contactDef)
+	local blocked = armor < 0.7
+	local cx, cy = att.x + nx * att.stats.radius, att.y + ny * att.stats.radius
+	local hit = false
+	local raw = 0
+
+	local del = Stats.deliveryAt(att.stats, contactAtt)
+	if del and (del.kind == "stinger" or closing > 40) then
+		local impact = clamp(0.35 + closing / 220, 0.35, 2)
+		raw = del.damage * att.stats.sizeFactor * impact
+		self:damage(def, raw * armor, att, if del.kind == "spikes" then "spike" else "sting", cx, cy, blocked)
+		if del.bleed then
+			def.bleed = { time = 3, dps = 3 * att.stats.sizeFactor * armor, source = att.id }
+		end
+		local surge = att.venomSurge > 0
+		if del.venom and (surge or att.energy >= T.venomCost) then
+			if not surge then
+				att.energy -= T.venomCost
+			end
+			local active = def.poison.time > 0
+			local add = if surge then 2 else 1
+			def.poison.stacks = math.min(T.venomMaxStacks, (if active then def.poison.stacks else 0) + add)
+			def.poison.dps = math.max(if active then def.poison.dps else 0, del.venom.dps)
+			def.poison.slow = math.max(if active then def.poison.slow else 0, del.venom.slow)
+			def.poison.time = T.venomDuration
+			def.poison.source = att.id
+		end
+		if armor < 1 then
+			self:damageOrganelle(att, del.index, raw * (1 - armor) * Organelles.SOAK.chipOnArmor)
+		end
+		hit = true
+	end
+
+	if closing > 90 then
+		local ratio = clamp(math.sqrt(att.stats.mass / def.stats.mass), 0.25, 3)
+		local bump = (closing - 90) * T.bumpFactor * ratio * armor
+		if bump >= 0.5 then
+			self:damage(def, bump, att, "bump", cx, cy, blocked)
+			raw += bump / math.max(0.05, armor)
+			hit = true
+		end
+	end
+	if raw > 0 and def.spawnProtect <= 0 then
+		for i, o in def.organelles do
+			if coversAngle(o, contactDef) then
+				self:damageOrganelle(def, i, raw * (if o.type == "membrane" then Organelles.SOAK.membrane else Organelles.SOAK.weapon))
+			end
+		end
+	end
+	return hit
+end
+
+-- ------------------------------------------------------------ step
+
+function World:step(dt: number)
+	self.time += dt
+	for _, c in self.cells do
+		if c.alive then
+			self:updateCell(c, dt)
+		end
+	end
+	self:collectNutrients()
+	self:resolveCollisions()
+	self:updateClouds(dt)
+	local dead = {}
+	for _, c in self.cells do
+		if c.alive and c.hp <= 0 then
+			table.insert(dead, c)
+		end
+	end
+	for _, c in dead do
+		self:kill(c)
+	end
+	self:replenish()
+end
+
+function World:updateCell(c, dt: number)
+	local s = c.stats
+	c.dashCd = math.max(0, c.dashCd - dt)
+	c.dashTime = math.max(0, c.dashTime - dt)
+	c.toxinCd = math.max(0, c.toxinCd - dt)
+	c.venomCd = math.max(0, c.venomCd - dt)
+	c.venomSurge = math.max(0, c.venomSurge - dt)
+	c.spawnProtect = math.max(0, c.spawnProtect - dt)
+	c.evolveProtect = math.max(0, c.evolveProtect - dt)
+	if c.evolving and c.evolveProtect > 0 and c.input.t > 0.15 then
+		c.evolveProtect = 0 -- steering ends editor protection
+	end
+	c.energy = math.min(s.energyMax, c.energy + s.energyRegen * dt)
+
+	local slow = math.max(if c.poison.time > 0 then c.poison.slow else 0, c.cloudSlow)
+	Movement.integrate(c, s, c.input, { slow = slow, evolving = c.evolving }, self.hazards, dt)
+	for _, h in self.hazards do
+		if h.kind == "acid" and math.sqrt((c.x - h.x) ^ 2 + (c.y - h.y) ^ 2) < h.r then
+			self:damage(c, (5 + s.maxHp * 0.012) * dt, nil, "acid", c.x, c.y, false)
+		end
+	end
+
+	if c.poison.time > 0 then
+		c.poison.time -= dt
+		self:damage(c, c.poison.dps * c.poison.stacks * dt, c.poison.source, "dot", c.x, c.y, false)
+		if c.poison.time <= 0 then
+			c.poison.stacks = 0
+		end
+	end
+	if c.bleed.time > 0 then
+		c.bleed.time -= dt
+		self:damage(c, c.bleed.dps * dt, c.bleed.source, "dot", c.x, c.y, false)
+	end
+	c.dotTimer = (c.dotTimer or 0) + dt
+	if c.dotTimer >= 0.6 then
+		if (c.dotAccum or 0) >= 0.5 then
+			self:pushEvent({ e = "hit", x = c.x, y = c.y, target = c.id, source = 0, amount = math.round(c.dotAccum), kind = "dot", blocked = false })
+		end
+		c.dotAccum = 0
+		c.dotTimer = 0
+	end
+
+	local outOfCombat = self.time - c.lastCombatAt > Config.COMBAT_TIMEOUT
+	-- Organelle regrowth / healing
+	local changed = false
+	for i, h in c.orgHealth do
+		if h.max > 0 then
+			if h.regrow > 0 then
+				h.regrow -= dt
+				if h.regrow <= 0 then
+					h.regrow = 0
+					h.hp = h.max
+					self:refreshStats(c)
+					self:pushEvent({ e = "regrow", id = c.id, type = c.organelles[i].type })
+					changed = true
+				end
+			elseif outOfCombat and h.hp < h.max then
+				h.hp = math.min(h.max, h.hp + h.max * Organelles.INTEGRITY_HEAL * dt)
+				changed = true
+			end
+		end
+	end
+	if changed then
+		self:publishCracks(c)
+	end
+
+	c.regenActive = false
+	if c.hp < s.maxHp then
+		if outOfCombat then
+			c.hp += s.maxHp * 0.002 * dt
+		end
+		if s.regenFrac > 0 then
+			local cost = T.regenEnergyPerSec * dt
+			if c.energy >= cost then
+				c.energy -= cost
+				c.hp += s.regenFrac * s.maxHp * (if outOfCombat then 3 else 1) * dt
+				c.regenActive = true
+			end
+		end
+		c.hp = math.min(c.hp, s.maxHp)
+	end
+
+	if c.biomass > Config.BIOMASS_DECAY_START then
+		c.biomass -= (c.biomass - Config.BIOMASS_DECAY_START) * Config.BIOMASS_DECAY_RATE * dt
+		if math.floor(self.time * 2) ~= math.floor((self.time - dt) * 2) then
+			self:refreshStats(c)
+		end
+	end
+end
+
+function World:collectNutrients()
+	for _, c in self.cells do
+		if c.alive then
+			local r = c.stats.radius
+			local eaten = {}
+			self:queryNutrients(c.x - r - 10, c.y - r - 10, c.x + r + 10, c.y + r + 10, function(n)
+				local nr = if n.kind == 5 then Config.CRYSTAL_RADIUS else Config.NUTRIENT_RADIUS
+				if (n.x - c.x) ^ 2 + (n.y - c.y) ^ 2 < (r + nr * 0.4) ^ 2 then
+					table.insert(eaten, n)
+				end
+			end)
+			if #eaten > 0 then
+				local gained, xp = 0, 0
+				for _, n in eaten do
+					self:removeNutrient(n)
+					gained += n.value
+					xp += n.xp
+					self:pushEvent({ e = "eat", id = c.id, nutrient = n.id, crystal = n.kind == 5 })
+				end
+				self:addBiomass(c, gained)
+				self:addXp(c, xp)
+			end
+		end
+	end
+end
+
+function World:resolveCollisions()
+	local list = {}
+	for _, c in self.cells do
+		if c.alive then
+			table.insert(list, c)
+		end
+	end
+	table.sort(list, function(p, q)
+		return p.id < q.id
+	end)
+	for i = 1, #list do
+		local A = list[i]
+		for j = i + 1, #list do
+			local B = list[j]
+			local rs = A.stats.radius + B.stats.radius
+			local dx, dy = B.x - A.x, B.y - A.y
+			local d2 = dx * dx + dy * dy
+			if d2 < rs * rs then
+				local d = math.sqrt(d2)
+				if d < 0.01 then
+					d = 0.01
+				end
+				local nx, ny = dx / d, dy / d
+				local overlap = rs - d
+				local mA, mB = A.stats.mass, B.stats.mass
+				local mt = mA + mB
+				A.x -= nx * overlap * (mB / mt) * 0.85
+				A.y -= ny * overlap * (mB / mt) * 0.85
+				B.x += nx * overlap * (mA / mt) * 0.85
+				B.y += ny * overlap * (mA / mt) * 0.85
+				local closing = (A.vx - B.vx) * nx + (A.vy - B.vy) * ny
+				if closing > 0 then
+					local imp = (1.4 * closing) / (1 / mA + 1 / mB)
+					A.vx -= imp / mA * nx
+					A.vy -= imp / mA * ny
+					B.vx += imp / mB * nx
+					B.vy += imp / mB * ny
+				end
+				if closing > 15 and (A.pairCooldown[B.id] or -1) <= self.time then
+					local ha = self:resolveHit(A, B, nx, ny, closing)
+					local hb = self:resolveHit(B, A, -nx, -ny, closing)
+					if ha or hb then
+						A.pairCooldown[B.id] = self.time + Config.PAIR_HIT_COOLDOWN
+					end
+				end
+			end
+		end
+	end
+end
+
+function World:updateClouds(dt: number)
+	for _, c in self.cells do
+		c.cloudSlow = 0
+	end
+	-- One owner's overlapping clouds never stack: each victim takes the strongest.
+	local worst = {}
+	for _, cl in self.clouds do
+		cl.life -= dt
+		for _, c in self.cells do
+			if c.alive and c.id ~= cl.owner then
+				local d = math.sqrt((c.x - cl.x) ^ 2 + (c.y - cl.y) ^ 2)
+				if d < cl.r + c.stats.radius * 0.6 then
+					local key = c.id * 100000 + cl.owner
+					local cur = worst[key]
+					if not cur or cl.dps > cur.dps then
+						worst[key] = { c = c, owner = cl.owner, dps = cl.dps }
+					end
+					c.cloudSlow = T.toxinSlow
+				end
+			end
+		end
+	end
+	for _, w in worst do
+		self:damage(w.c, w.dps * dt, w.owner, "toxin", w.c.x, w.c.y, false)
+	end
+	local kept = {}
+	for _, cl in self.clouds do
+		if cl.life > 0 then
+			table.insert(kept, cl)
+		end
+	end
+	self.clouds = kept
+end
+
+function World:kill(victim)
+	victim.alive = false
+	local killer = nil
+	if victim.lastHitBy and self.time - victim.lastHitAt < Config.KILL_CREDIT_WINDOW then
+		killer = self.cells[victim.lastHitBy]
+	end
+	if killer and killer.alive and killer ~= victim then
+		killer.kills += 1
+		self:addBiomass(killer, victim.biomass * 0.35)
+		self:addXp(killer, math.round(12 + victim.level * 10 + victim.biomass * 0.08))
+		self:pushEvent({ e = "kill", killer = killer.name, victim = victim.name, how = victim.lastHitKind })
+	else
+		killer = nil
+	end
+	local count = clamp(math.round(victim.biomass * 0.45 / 2), 4, 70)
+	for _ = 1, count do
+		local n = self:spawnNutrient(false, victim, victim.stats.radius * 1.6)
+		n.value = 2
+	end
+	if victim.level >= 4 then
+		self:spawnNutrient(true, victim, victim.stats.radius)
+	end
+	self:pushEvent({ e = "death", id = victim.id, x = victim.x, y = victim.y, hue = victim.hue, r = victim.stats.radius })
+	local stats = {
+		survivalTime = self.time - victim.bornAt,
+		level = victim.level,
+		kills = victim.kills,
+		biomassCollected = math.round(victim.biomassCollected),
+		peakBiomass = math.round(victim.peakBiomass),
+		killedBy = if killer then killer.name else nil,
+		killerId = if killer then killer.id else nil,
+	}
+	self:removeCell(victim.id)
+	self.onDeath(victim, stats)
+end
+
+function World:replenish()
+	local budget = 30
+	while budget > 0 and self.nutrientCount < Config.NUTRIENT_TARGET do
+		self:spawnNutrient(false)
+		budget -= 1
+	end
+	if self.crystalCount < Config.CRYSTAL_TARGET and self:rand() < 0.05 then
+		self:spawnNutrient(true)
+	end
+	if self:rand() < 0.01 then
+		local b = self.blooms[self.rng:NextInteger(1, #self.blooms)]
+		b.x = self:rand() * self.size
+		b.y = self:rand() * self.size
+	end
+end
+
+return World
+]]></ProtectedString></Properties></Item></Item></Item><Item class="StarterPlayer" referent="RBX20"><Properties><string name="Name">StarterPlayer</string></Properties><Item class="StarterPlayerScripts" referent="RBX19"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX16"><Properties><string name="Name">Client</string><ProtectedString name="Source"><![CDATA[-- CELL.IO client entry point: camera, input, effects and UI wiring.
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared.Config)
+local MathUtil = require(Shared.MathUtil)
+
+local Net = require(script.Net)
+local Renderer = require(script.Renderer)
+local UI = require(script.UI)
+
+local S = Config.STUDS_PER_UNIT
+local camera = Workspace.CurrentCamera
+
+local screen = "menu"
+local focus = { x = Config.WORLD_SIZE / 2, y = Config.WORLD_SIZE / 2, r = 22 }
+local camPos = Vector3.new(focus.x * S, 0, focus.y * S)
+local camHeight = Config.cameraHeight(22)
+local spectateId: number? = nil
+local dismissedEvolution = false
+local lastQueuedToast = 0
+
+local function setScreen(s: string)
+	screen = s
+	UI.setScreen(s)
+end
+
+UI.init(Net, {
+	onPlay = function()
+		Net.R.Play:FireServer()
+		spectateId = nil
+		UI.setSpectate(nil)
+		setScreen("playing")
+	end,
+	onAbility = function(key: string)
+		if screen == "playing" and not UI.isEvolutionOpen() then
+			Net.R.Ability:FireServer(key)
+		end
+	end,
+	onEvolveOpen = function()
+		local you = Net.you
+		if screen ~= "playing" or not you or you.pendingEvolutions <= 0 then
+			return
+		end
+		if you.combatLock > 0 then
+			UI.toast("Evolution queued\n<font size=\"16\">Get out of combat to evolve</font>", 1.2)
+			return
+		end
+		dismissedEvolution = false
+		Net.R.EvolveOpen:FireServer()
+	end,
+	onEvolveClose = function()
+		dismissedEvolution = true
+		Net.R.EvolveClose:FireServer()
+	end,
+	onEvolveChoose = function(index: number, slot: number?, tilt: number)
+		Net.R.EvolveChoose:FireServer(index, slot, tilt)
+	end,
+})
+
+Net.onWelcome = function()
+	Renderer.buildWorld(Net.hazards)
+end
+
+Net.onOffer = function(o)
+	if screen == "playing" then
+		local you = Net.you
+		UI.showEvolution(o.offers, if you then you.level else 1, if you then you.pendingEvolutions else 1)
+	end
+end
+
+Net.onEvolveResult = function(ok: boolean, err: string?)
+	if ok then
+		UI.hideEvolution() -- the server sends a new offer if more are pending
+		UI.toast("Organelle attached!", 1)
+	else
+		UI.evolveError(err or "rejected")
+	end
+end
+
+Net.onDied = function(stats)
+	UI.hideEvolution()
+	if stats.killerId then
+		spectateId = stats.killerId
+		UI.setSpectate(`Killed by {stats.killedBy}`)
+	end
+	task.delay(if stats.killerId then 3 else 0.9, function()
+		UI.setSpectate(nil)
+		if screen == "playing" then
+			setScreen("dead")
+			UI.showDeath(stats)
+		end
+	end)
+end
+
+Net.onNutrientsRemoved = function(ids)
+	Renderer.removeNutrients(ids)
+end
+
+local HIT_COLORS = {
+	spike = Color3.new(1, 1, 1),
+	sting = Color3.fromRGB(208, 139, 255),
+	bump = Color3.fromRGB(184, 212, 220),
+	dot = Color3.fromRGB(157, 255, 61),
+	toxin = Color3.fromRGB(198, 255, 61),
+	acid = Color3.fromRGB(198, 255, 61),
+}
+local VERBS = { spike = "spiked", sting = "stung", dot = "poisoned", toxin = "gassed", bump = "rammed", acid = "dissolved" }
+
+Net.onEvents = function(events)
+	for _, ev in events do
+		if ev.e == "hit" then
+			Renderer.burst(ev.x, ev.y, if ev.kind == "dot" then 3 else 4 + ev.amount, HIT_COLORS[ev.kind] or Color3.new(1, 1, 1))
+			if ev.amount >= 1 then
+				local mine = ev.target == Net.myId
+				local byMe = ev.source == Net.myId and ev.source ~= 0
+				local color = if mine then Color3.fromRGB(255, 107, 129) elseif byMe then Color3.fromRGB(255, 241, 168) else Color3.fromRGB(216, 232, 236)
+				Renderer.damageNumber(ev.x, ev.y, ev.amount, color, mine or byMe)
+			end
+		elseif ev.e == "death" then
+			Renderer.burst(ev.x, ev.y, 50, Color3.fromHSV(ev.hue % 1, 0.6, 1))
+			Renderer.destroyView(ev.id)
+		elseif ev.e == "eat" then
+			Renderer.eatNutrient(ev.nutrient, ev.id)
+		elseif ev.e == "level" and ev.id == Net.myId then
+			UI.toast(`Level {ev.level}!\n<font size="16">New evolution available</font>`)
+			dismissedEvolution = false
+		elseif ev.e == "toxin" then
+			Renderer.burst(ev.x, ev.y, 40, Color3.fromRGB(198, 255, 61))
+		elseif ev.e == "break" then
+			Renderer.burst(ev.x, ev.y, 22, Color3.fromRGB(255, 241, 214))
+			if ev.id == Net.myId then
+				UI.toast(`Your {ev.type} broke!\n<font size="16">It regrows in 12 s</font>`, 1.5)
+			end
+		elseif ev.e == "kill" then
+			UI.killfeed(`{ev.killer} {VERBS[ev.how] or "killed"} {ev.victim}`)
+		end
+	end
+end
+
+-- ------------------------------------------------------------ input
+-- Steering target in screen pixels: a held finger, else the mouse.
+local activeTouch: Vector2? = nil
+local function steerTarget(): Vector2?
+	if activeTouch then
+		return activeTouch
+	end
+	if UserInputService.MouseEnabled then
+		return UserInputService:GetMouseLocation()
+	end
+	return nil
+end
+UserInputService.TouchStarted:Connect(function(input, processed)
+	if not processed then
+		activeTouch = Vector2.new(input.Position.X, input.Position.Y)
+	end
+end)
+UserInputService.TouchMoved:Connect(function(input)
+	if activeTouch then
+		activeTouch = Vector2.new(input.Position.X, input.Position.Y)
+	end
+end)
+UserInputService.TouchEnded:Connect(function()
+	activeTouch = nil
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or screen ~= "playing" then
+		return
+	end
+	local k = input.KeyCode
+	if k == Enum.KeyCode.Space then
+		UI.callbacks.onAbility("dash")
+	elseif k == Enum.KeyCode.Q then
+		local you = Net.you
+		UI.callbacks.onAbility(if you and not you.hasToxin and you.hasVenom then "venom" else "toxin")
+	elseif k == Enum.KeyCode.R then
+		UI.callbacks.onAbility("venom")
+	elseif k == Enum.KeyCode.E then
+		UI.callbacks.onEvolveOpen()
+	end
+end)
+
+local lastInput = 0
+local function sendInput(now: number)
+	if now - lastInput < 0.05 or not Net.you then
+		return
+	end
+	lastInput = now
+	local target = steerTarget()
+	if UI.isEvolutionOpen() or not target then
+		Net.R.Input:FireServer(0, 0)
+		return
+	end
+	-- Project the pointer onto the arena floor (y = 0).
+	local ray = camera:ViewportPointToRay(target.X, target.Y)
+	if math.abs(ray.Direction.Y) < 1e-4 then
+		return
+	end
+	local dist = -ray.Origin.Y / ray.Direction.Y
+	local hit = ray.Origin + ray.Direction * dist
+	local wx, wy = hit.X / S, hit.Z / S
+	local dx, dy = wx - focus.x, wy - focus.y
+	-- Throttle by on-screen distance from the cell.
+	local cellScreen = camera:WorldToViewportPoint(Vector3.new(focus.x * S, 0, focus.y * S))
+	local screenDist = (Vector2.new(cellScreen.X, cellScreen.Y) - target).Magnitude
+	local viewport = camera.ViewportSize
+	local dead = 12
+	local throttle = math.clamp((screenDist - dead) / (math.min(viewport.X, viewport.Y) * 0.22), 0, 1)
+	Net.R.Input:FireServer(math.atan2(dy, dx), throttle)
+end
+
+-- ------------------------------------------------------------ frame
+camera.CameraType = Enum.CameraType.Scriptable
+camera.FieldOfView = 70
+
+local hudTimer = 0
+RunService.RenderStepped:Connect(function(dt)
+	local now = os.clock()
+	local cells = Net.sample()
+	local me = cells[Net.myId]
+	if me and Net.you then
+		focus = { x = me.x, y = me.y, r = me.radius }
+	elseif spectateId and cells[spectateId] then
+		local k = cells[spectateId]
+		focus = { x = k.x, y = k.y, r = math.max(30, k.radius) }
+	end
+	Renderer.frame(cells, Net.infos, Net.nutrients, Net.clouds, Net.myId, now)
+
+	-- Camera: smooth follow, height grows with the cell.
+	local target = Vector3.new(focus.x * S, 0, focus.y * S)
+	if (target - camPos).Magnitude > 80 then
+		camPos = target
+	end
+	camPos = camPos:Lerp(target, 1 - math.exp(-dt * 10))
+	camHeight = MathUtil.lerp(camHeight, Config.cameraHeight(focus.r), 1 - math.exp(-dt * 2.5))
+	camera.CFrame = CFrame.lookAt(camPos + Vector3.new(0, camHeight, 0), camPos, Vector3.new(0, 0, -1))
+
+	if screen == "playing" then
+		sendInput(now)
+		hudTimer += dt
+		if hudTimer > 0.1 then
+			hudTimer = 0
+			local info = Net.infos[Net.myId]
+			UI.updateHud(Net.you, if info then info.organelles else {}, Net.leaderboard, Net.myId)
+			-- Auto-open evolution when available and out of combat.
+			local you = Net.you
+			if you and you.pendingEvolutions > 0 and not UI.isEvolutionOpen() and not dismissedEvolution then
+				if you.combatLock > 0 then
+					if now - lastQueuedToast > 2.5 then
+						lastQueuedToast = now
+						UI.toast("Evolution queued\n<font size=\"16\">Get out of combat to evolve</font>", 1.2)
+					end
+				elseif now - lastQueuedToast > 1.5 then
+					lastQueuedToast = now
+					Net.R.EvolveOpen:FireServer()
+				end
+			end
+		end
+	end
+end)
+]]></ProtectedString></Properties><Item class="ModuleScript" referent="RBX13"><Properties><string name="Name">Net</string><ProtectedString name="Source"><![CDATA[-- Client networking state: snapshot buffer + interpolation, cell infos,
+-- nutrient deltas, private state. Server time comes in every snapshot.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local MathUtil = require(Shared.MathUtil)
+
+local Net = {}
+
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+Net.R = {}
+for _, r in remotes:GetChildren() do
+	Net.R[r.Name] = r
+end
+
+Net.myId = 0
+Net.worldSize = 4800
+Net.hazards = {}
+Net.you = nil
+Net.infos = {} -- id -> info
+Net.nutrients = {} -- id -> { id, x, y, kind }
+Net.clouds = {}
+Net.leaderboard = {}
+Net.latest = {} -- id -> cell record of the newest snapshot
+
+local buffer = {} -- { t, cells = { [id] = rec } }
+local offset: number? = nil -- server time - local clock
+local INTERP_DELAY = 0.12
+
+-- Callbacks set by other modules.
+Net.onEvents = function(_events) end
+Net.onOffer = function(_offer) end
+Net.onEvolveResult = function(_ok, _err) end
+Net.onDied = function(_stats) end
+Net.onWelcome = function() end
+Net.onNutrientsRemoved = function(_ids) end
+
+local function unpackCell(a)
+	return { id = a[1], x = a[2], y = a[3], heading = a[4], radius = a[5], hp = a[6], flags = a[7], vx = a[8], vy = a[9] }
+end
+
+Net.R.Welcome.OnClientEvent:Connect(function(w)
+	Net.myId = w.id
+	Net.worldSize = w.worldSize
+	Net.hazards = w.hazards
+	buffer = {}
+	Net.onWelcome()
+end)
+
+Net.R.Snapshot.OnClientEvent:Connect(function(s)
+	local now = os.clock()
+	local off = s.t - now
+	if offset == nil or math.abs(off - offset) > 0.5 then
+		offset = off
+	else
+		offset += (off - offset) * 0.08
+	end
+	local cells = {}
+	for _, a in s.cells do
+		local rec = unpackCell(a)
+		cells[rec.id] = rec
+	end
+	table.insert(buffer, { t = s.t, cells = cells })
+	if #buffer > 30 then
+		table.remove(buffer, 1)
+	end
+	Net.latest = cells
+	for _, info in s.infos do
+		Net.infos[info.id] = info
+	end
+	Net.you = s.you
+	local clouds = {}
+	for _, c in s.clouds do
+		table.insert(clouds, { id = c[1], x = c[2], y = c[3], r = c[4], life = c[5] })
+	end
+	Net.clouds = clouds
+
+	if s.nAdd then
+		local removed = {}
+		if s.nFull then
+			for id in Net.nutrients do
+				table.insert(removed, id)
+			end
+			Net.nutrients = {}
+		end
+		for _, n in s.nAdd do
+			Net.nutrients[n[1]] = { id = n[1], x = n[2], y = n[3], kind = n[4] }
+		end
+		for _, id in s.nDel do
+			if Net.nutrients[id] then
+				Net.nutrients[id] = nil
+				table.insert(removed, id)
+			end
+		end
+		if #removed > 0 then
+			Net.onNutrientsRemoved(removed)
+		end
+	end
+end)
+
+Net.R.Events.OnClientEvent:Connect(function(events)
+	Net.onEvents(events)
+end)
+Net.R.Leaderboard.OnClientEvent:Connect(function(l)
+	Net.leaderboard = l
+end)
+Net.R.Offer.OnClientEvent:Connect(function(o)
+	Net.onOffer(o)
+end)
+Net.R.EvolveResult.OnClientEvent:Connect(function(ok, err)
+	Net.onEvolveResult(ok, err)
+end)
+Net.R.Died.OnClientEvent:Connect(function(stats)
+	Net.you = nil
+	Net.onDied(stats)
+end)
+
+-- Cells interpolated at render time (server time - INTERP_DELAY).
+function Net.sample()
+	local out = {}
+	if #buffer == 0 or offset == nil then
+		return out
+	end
+	local rt = os.clock() + offset - INTERP_DELAY
+	local older, newer = buffer[1], buffer[#buffer]
+	for i = #buffer, 2, -1 do
+		if buffer[i - 1].t <= rt then
+			older, newer = buffer[i - 1], buffer[i]
+			break
+		end
+	end
+	local span = newer.t - older.t
+	local f = if span > 0 then math.clamp((rt - older.t) / span, 0, 1.2) else 1
+	for id, n in newer.cells do
+		local o = older.cells[id]
+		if o then
+			out[id] = {
+				id = id,
+				x = MathUtil.lerp(o.x, n.x, f),
+				y = MathUtil.lerp(o.y, n.y, f),
+				heading = MathUtil.lerpAngle(o.heading, n.heading, math.min(1, f)),
+				radius = MathUtil.lerp(o.radius, n.radius, math.min(1, f)),
+				hp = n.hp,
+				flags = n.flags,
+				vx = n.vx,
+				vy = n.vy,
+			}
+		else
+			out[id] = n
+		end
+	end
+	return out
+end
+
+return Net
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX14"><Properties><string name="Name">Renderer</string><ProtectedString name="Source"><![CDATA[-- Client-side rendering. Everything is built from plain parts on this client
+-- only (nothing replicates back). Simulation (x, y) maps to world (X, Z) at
+-- Config.STUDS_PER_UNIT; the camera looks straight down, screen-up = -Z, so
+-- the layout matches the web version (y grows downward on screen).
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Organelles = require(Shared.Organelles)
+local Placement = require(Shared.Placement)
+local Strategy = require(Shared.Strategy)
+
+local S = Config.STUDS_PER_UNIT
+local TUNING = Organelles.TUNING
+
+local Renderer = {}
+
+local root = Instance.new("Folder")
+root.Name = "CellIOView"
+root.Parent = Workspace
+
+local function newPart(class: string?, props): BasePart
+	local p = Instance.new(class or "Part") :: BasePart
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Material = Enum.Material.SmoothPlastic
+	for k, v in props do
+		(p :: any)[k] = v
+	end
+	p.Parent = props.Parent or root
+	return p
+end
+
+local function toWorld(x: number, y: number, h: number?): Vector3
+	return Vector3.new(x * S, h or 0, y * S)
+end
+
+-- Rotation so that local +X points along simulation angle `a`.
+local function yaw(a: number): CFrame
+	return CFrame.Angles(0, -a, 0)
+end
+
+local FLAT = CFrame.Angles(0, 0, math.pi / 2) -- cylinder axis -> vertical
+
+-- Two mirrored WedgeParts make an isosceles triangle seen from above.
+local function makeTriangle(color: Color3, transparency: number?)
+	local a = newPart("WedgePart", { Color = color, Transparency = transparency or 0 })
+	local b = newPart("WedgePart", { Color = color, Transparency = transparency or 0 })
+	return { a, b }
+end
+
+-- CFrames for the two halves: base centre `pos`, pointing along world angle `dir`.
+local function triangleCFrames(pos: Vector3, dir: number, width: number, length: number): (CFrame, CFrame)
+	local f = Vector3.new(math.cos(dir), 0, math.sin(dir))
+	local side = Vector3.new(-math.sin(dir), 0, math.cos(dir))
+	local up = Vector3.new(0, 1, 0)
+	local mid = pos + f * (length / 2)
+	-- A WedgePart's cross-section (local Y/Z) is a right triangle whose thin
+	-- tip is at local -Z on the -Y edge. Map -Z to the spike direction and the
+	-- -Y edge onto the centre line, so the two halves meet in one point.
+	-- (Both frames are right-handed: X x Y = Z.)
+	local a = CFrame.fromMatrix(mid + side * (width / 4), -up, side, -f)
+	local b = CFrame.fromMatrix(mid - side * (width / 4), up, -side, -f)
+	return a, b
+end
+
+
+-- ------------------------------------------------------------ static world
+function Renderer.buildWorld(hazards)
+	for _, c in root:GetChildren() do
+		if c.Name == "World" then
+			c:Destroy()
+		end
+	end
+	local world = Instance.new("Folder")
+	world.Name = "World"
+	world.Parent = root
+	local size = Config.WORLD_SIZE * S
+	newPart(nil, { Name = "Floor", Size = Vector3.new(size + 40, 1, size + 40), CFrame = CFrame.new(size / 2, -1.2, size / 2), Color = Color3.fromRGB(8, 34, 42), Parent = world })
+	-- Faint grid
+	for i = 0, Config.WORLD_SIZE, 240 do
+		local v = i * S
+		newPart(nil, { Size = Vector3.new(0.12, 0.05, size), CFrame = CFrame.new(v, -0.68, size / 2), Color = Color3.fromRGB(40, 110, 120), Transparency = 0.7, Parent = world })
+		newPart(nil, { Size = Vector3.new(size, 0.05, 0.12), CFrame = CFrame.new(size / 2, -0.68, v), Color = Color3.fromRGB(40, 110, 120), Transparency = 0.7, Parent = world })
+	end
+	-- Glowing border
+	for _, spec in { { size / 2, 0, size, 0.8 }, { size / 2, size, size, 0.8 }, { 0, size / 2, 0.8, size }, { size, size / 2, 0.8, size } } do
+		newPart(nil, { Size = Vector3.new(spec[3], 0.4, spec[4]), CFrame = CFrame.new(spec[1], -0.4, spec[2]), Color = Color3.fromRGB(94, 242, 214), Material = Enum.Material.Neon, Parent = world })
+	end
+	for _, h in hazards do
+		if h.kind == "acid" then
+			newPart(nil, { Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.2, h.r * 2 * S, h.r * 2 * S), CFrame = CFrame.new(toWorld(h.x, h.y, -0.55)) * FLAT, Color = Color3.fromRGB(122, 214, 42), Material = Enum.Material.Neon, Transparency = 0.75, Parent = world })
+		else
+			newPart(nil, { Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.1, h.r * 2 * S, h.r * 2 * S), CFrame = CFrame.new(toWorld(h.x, h.y, -0.6)) * FLAT, Color = Color3.fromRGB(111, 214, 255), Transparency = 0.9, Parent = world })
+			-- Arrow showing the current's direction
+			local tri = makeTriangle(Color3.fromRGB(159, 232, 255), 0.6)
+			local a, b = triangleCFrames(toWorld(h.x, h.y, -0.5), h.dir, 4, 6)
+			for i, cf in { a, b } do
+				tri[i].Size = Vector3.new(0.1, 2, 6)
+				tri[i].CFrame = cf
+				tri[i].Parent = world
+			end
+		end
+	end
+	Lighting.Ambient = Color3.fromRGB(120, 160, 170)
+	Lighting.OutdoorAmbient = Color3.fromRGB(120, 160, 170)
+	Lighting.Brightness = 1.5
+	Lighting.ClockTime = 12
+end
+
+-- ------------------------------------------------------------ cells
+local views = {} -- id -> view
+
+local function hueColor(h: number, s: number, v: number): Color3
+	return Color3.fromHSV(h % 1, s, v)
+end
+
+local function clearOrganelleParts(v)
+	for _, p in v.orgParts do
+		p:Destroy()
+	end
+	v.orgParts = {}
+	v.orgSpecs = {}
+end
+
+local function damagedColor(c: Color3, stage: number): Color3
+	if stage == 1 then
+		return c:Lerp(Color3.fromRGB(110, 90, 80), 0.35)
+	elseif stage >= 2 then
+		return c:Lerp(Color3.fromRGB(70, 60, 55), 0.6)
+	end
+	return c
+end
+
+-- (Re)build organelle parts from the latest layout.
+local function buildOrganelles(v, info)
+	clearOrganelleParts(v)
+	for i, o in info.organelles do
+		local stage = info.cracks and info.cracks[i] or 0
+		local def = Organelles.DEFS[o.type]
+		local spec = { o = o, stage = stage, parts = {} }
+		local color = damagedColor(def.color, stage)
+		local transp = if stage >= 3 then 0.65 else 0
+		if o.type == "spikes" or o.type == "stinger" then
+			spec.parts = makeTriangle(color, transp)
+			if o.type == "stinger" then
+				table.insert(spec.parts, newPart(nil, { Shape = Enum.PartType.Ball, Color = Color3.fromRGB(192, 77, 255), Material = Enum.Material.Neon, Transparency = transp }))
+			end
+		elseif o.type == "membrane" then
+			for _ = 1, 4 do
+				table.insert(spec.parts, newPart(nil, { Color = color, Transparency = transp }))
+			end
+		elseif o.type == "cilia" then
+			for _ = 1, 5 + o.level do
+				table.insert(spec.parts, newPart(nil, { Color = def.color, Material = Enum.Material.Neon, Transparency = 0.2 }))
+			end
+		elseif o.type == "flagellum" then
+			for _ = 1, 8 do
+				table.insert(spec.parts, newPart(nil, { Shape = Enum.PartType.Ball, Color = def.color, Material = Enum.Material.Neon }))
+			end
+		else -- internal organelles: glowing beads
+			local p = newPart(nil, { Shape = Enum.PartType.Ball, Color = def.color, Material = Enum.Material.Neon, Transparency = 0.1 })
+			table.insert(spec.parts, p)
+		end
+		for _, p in spec.parts do
+			table.insert(v.orgParts, p)
+		end
+		table.insert(v.orgSpecs, spec)
+	end
+end
+
+local function makeLabel(v, adornee: BasePart)
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(200, 54)
+	bb.StudsOffsetWorldSpace = Vector3.new(0, 0, 0)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.Adornee = adornee
+	bb.Parent = adornee
+	local name = Instance.new("TextLabel")
+	name.Size = UDim2.new(1, 0, 0, 20)
+	name.BackgroundTransparency = 1
+	name.Font = Enum.Font.GothamBlack
+	name.TextSize = 15
+	name.TextColor3 = Color3.new(1, 1, 1)
+	name.TextStrokeTransparency = 0.3
+	name.Parent = bb
+	local badge = Instance.new("TextLabel")
+	badge.Size = UDim2.new(1, 0, 0, 14)
+	badge.Position = UDim2.fromOffset(0, 20)
+	badge.BackgroundTransparency = 1
+	badge.Font = Enum.Font.GothamBlack
+	badge.TextSize = 11
+	badge.TextStrokeTransparency = 0.4
+	badge.Parent = bb
+	local barBg = Instance.new("Frame")
+	barBg.Size = UDim2.new(0.5, 0, 0, 6)
+	barBg.Position = UDim2.new(0.25, 0, 0, 38)
+	barBg.BackgroundColor3 = Color3.new(0, 0, 0)
+	barBg.BackgroundTransparency = 0.4
+	barBg.BorderSizePixel = 0
+	barBg.Parent = bb
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.fromScale(1, 1)
+	bar.BackgroundColor3 = Color3.fromRGB(255, 93, 122)
+	bar.BorderSizePixel = 0
+	bar.Parent = barBg
+	v.label, v.nameText, v.badgeText, v.barBg, v.bar = bb, name, badge, barBg, bar
+end
+
+local function newView(id: number)
+	local v = { id = id, orgParts = {}, orgSpecs = {}, version = -1, seed = (id * 2.39996) % (math.pi * 2) }
+	v.body = newPart(nil, { Shape = Enum.PartType.Cylinder, Transparency = 0.35 })
+	v.rim = newPart(nil, { Shape = Enum.PartType.Cylinder, Material = Enum.Material.Neon, Transparency = 0.35 })
+	v.nucleus = newPart(nil, { Shape = Enum.PartType.Ball, Transparency = 0.15 })
+	v.anchor = newPart(nil, { Transparency = 1, Size = Vector3.new(0.2, 0.2, 0.2) })
+	makeLabel(v, v.anchor)
+	views[id] = v
+	return v
+end
+
+local function destroyView(id: number)
+	local v = views[id]
+	if not v then
+		return
+	end
+	clearOrganelleParts(v)
+	v.body:Destroy()
+	v.rim:Destroy()
+	v.nucleus:Destroy()
+	v.anchor:Destroy()
+	views[id] = nil
+end
+Renderer.destroyView = destroyView
+
+function Renderer.viewOf(id: number)
+	return views[id]
+end
+
+-- Per-frame update of one cell. Appends parts/CFrames for BulkMoveTo.
+local function updateCell(v, s, info, t: number, parts, cfs, mine: boolean)
+	local R = s.radius * S
+	local h = s.heading
+	local cx, cz = s.x * S, s.y * S
+	local center = Vector3.new(cx, 0, cz)
+	local hue = if info then info.hue else 0.5
+	local poisoned = bit32.band(s.flags, 4) ~= 0
+	local protected = bit32.band(s.flags, 1) ~= 0
+	local evolving = bit32.band(s.flags, 2) ~= 0
+	local surge = bit32.band(s.flags, 256) ~= 0
+	local pulse = 1 + 0.03 * math.sin(t * 3 + v.seed)
+
+	v.body.Size = Vector3.new(0.3, R * 2 * pulse, R * 2 * pulse)
+	v.body.Color = if poisoned then hueColor(0.25, 0.7, 0.75) else hueColor(hue, 0.55, 0.8)
+	v.rim.Size = Vector3.new(0.18, R * 2.1 * pulse, R * 2.1 * pulse)
+	v.rim.Color = if evolving then Color3.fromRGB(255, 226, 122) elseif protected then Color3.new(1, 1, 1) else hueColor(hue, 0.5, 1)
+	v.rim.Transparency = if protected then 0.2 + 0.3 * math.abs(math.sin(t * 6)) else 0.35
+	v.nucleus.Size = Vector3.one * R * 0.5 * (1 + 0.06 * math.sin(t * 2.4 + v.seed))
+	v.nucleus.Color = hueColor(hue + 0.08, 0.6, 0.45)
+	table.insert(parts, v.body)
+	table.insert(cfs, CFrame.new(center + Vector3.new(0, 0.1, 0)) * FLAT)
+	table.insert(parts, v.rim)
+	table.insert(cfs, CFrame.new(center + Vector3.new(0, -0.05, 0)) * FLAT)
+	table.insert(parts, v.nucleus)
+	local nl = Vector3.new(math.cos(h + math.pi) * R * 0.12, 0.3, math.sin(h + math.pi) * R * 0.12)
+	table.insert(cfs, CFrame.new(center + nl))
+	table.insert(parts, v.anchor)
+	table.insert(cfs, CFrame.new(center + Vector3.new(0, 1, R * 1.45)))
+
+	local centerTaken = false
+	for _, spec in v.orgSpecs do
+		local o = spec.o
+		local at = Placement.angle(o)
+		local dir = Placement.direction(o)
+		local worldAt = h + at
+		local worldDir = h + dir
+		local base = center + Vector3.new(math.cos(worldAt) * R, 0.2, math.sin(worldAt) * R)
+		local broken = spec.stage >= 3
+		if o.type == "spikes" or o.type == "stinger" then
+			local L = (if o.type == "spikes" then TUNING.spikeLength[o.level] else 0.5 + 0.06 * o.level) * R * (if broken then 0.3 else 1)
+			local W = (if o.type == "spikes" then 0.26 + 0.04 * o.level else 0.12) * R
+			spec.parts[1].Size = Vector3.new(0.25, W / 2, L)
+			spec.parts[2].Size = Vector3.new(0.25, W / 2, L)
+			local a, b = triangleCFrames(base - Vector3.new(math.cos(worldDir), 0, math.sin(worldDir)) * R * 0.05, worldDir, W, L)
+			table.insert(parts, spec.parts[1])
+			table.insert(cfs, a)
+			table.insert(parts, spec.parts[2])
+			table.insert(cfs, b)
+			if spec.parts[3] then
+				spec.parts[3].Size = Vector3.one * math.max(0.25, R * 0.1)
+				spec.parts[3].Transparency = if surge then 0 else 0.3
+				table.insert(parts, spec.parts[3])
+				table.insert(cfs, CFrame.new(base + Vector3.new(math.cos(worldDir), 0, math.sin(worldDir)) * L))
+			end
+		elseif o.type == "membrane" then
+			local half = TUNING.membraneHalfArc
+			local n = #spec.parts
+			local thick = (0.1 + 0.035 * o.level) * R
+			for k = 1, n do
+				local th = worldAt - half + (k - 0.5) * (2 * half / n)
+				local p = spec.parts[k]
+				local seg = 2 * half / n * R * 1.08
+				p.Size = Vector3.new(thick, 0.3, seg)
+				p.Transparency = if broken then 0.8 else 0
+				table.insert(parts, p)
+				local pos = center + Vector3.new(math.cos(th) * (R + thick / 2), 0.15, math.sin(th) * (R + thick / 2))
+				table.insert(cfs, CFrame.new(pos) * yaw(th))
+			end
+		elseif o.type == "cilia" then
+			local tilt = dir - at
+			local n = #spec.parts
+			for k = 1, n do
+				local th = worldAt + ((k - 1) / math.max(1, n - 1) - 0.5) * 0.5
+				local beat = math.sin(t * 14 + k * 0.9 + v.seed) * 0.35
+				local len = (0.2 + 0.05 * o.level) * R
+				local a = th + tilt + beat * 0.5
+				local p = spec.parts[k]
+				p.Size = Vector3.new(len, 0.12, 0.12)
+				local root = center + Vector3.new(math.cos(th) * R * 0.98, 0.1, math.sin(th) * R * 0.98)
+				table.insert(parts, p)
+				table.insert(cfs, CFrame.new(root + Vector3.new(math.cos(a), 0, math.sin(a)) * len / 2) * yaw(a))
+			end
+		elseif o.type == "flagellum" then
+			local L = (1.5 + 0.2 * o.level) * R
+			local n = #spec.parts
+			local fx, fz = math.cos(worldDir), math.sin(worldDir)
+			local nx, nz = -fz, fx
+			local speed = math.sqrt(s.vx * s.vx + s.vy * s.vy)
+			local freq = 8 + math.min(14, speed / 20)
+			for k = 1, n do
+				local f = k / n
+				local lat = math.sin(f * 7 - t * freq) * 0.16 * f * R
+				local p = spec.parts[k]
+				p.Size = Vector3.one * math.max(0.2, R * (0.16 - 0.1 * f))
+				table.insert(parts, p)
+				table.insert(cfs, CFrame.new(base + Vector3.new(fx * f * L + nx * lat, 0, fz * f * L + nz * lat)))
+			end
+		else
+			local slot = Placement.internal(o.slot)
+			if o.slot == 0 then
+				centerTaken = true
+			end
+			local wa = h + slot.a
+			local p = spec.parts[1]
+			local pul = if o.type == "regen" then 1 + 0.12 * math.sin(t * 3 + o.slot) else 1
+			p.Size = Vector3.one * R * (if o.type == "mitochondria" then 0.28 else 0.3) * pul
+			table.insert(parts, p)
+			table.insert(cfs, CFrame.new(center + Vector3.new(math.cos(wa) * slot.r * R * 0.95, 0.35, math.sin(wa) * slot.r * R * 0.95)))
+		end
+	end
+	v.nucleus.Transparency = if centerTaken then 1 else 0.15
+
+	-- Label + health bar
+	if info then
+		local key = `{info.name}|{info.level}|{#info.organelles}|{info.version or 0}`
+		if key ~= v.labelKey then
+			v.labelKey = key
+			v.nameText.Text = `{info.name} · {info.level}`
+			v.nameText.TextColor3 = if mine then Color3.fromRGB(255, 226, 122) elseif info.ai then Color3.fromRGB(191, 233, 240) else Color3.new(1, 1, 1)
+			local strat = Strategy.classify(info.organelles)
+			v.badgeText.Text = if strat then string.upper(strat) else ""
+			v.badgeText.TextColor3 = if strat then Strategy.COLORS[strat] else Color3.new(1, 1, 1)
+		end
+	end
+	v.bar.Size = UDim2.fromScale(math.clamp(s.hp, 0, 1), 1)
+	v.bar.BackgroundColor3 = if poisoned then Color3.fromRGB(157, 255, 61) else Color3.fromRGB(255, 93, 122)
+	v.barBg.Visible = s.hp < 0.995 or mine
+end
+
+-- ------------------------------------------------------------ nutrients
+local nutrientParts = {} -- id -> part
+local NUTRIENT_COLORS = {
+	[0] = Color3.fromRGB(125, 255, 178),
+	[1] = Color3.fromRGB(255, 227, 107),
+	[2] = Color3.fromRGB(255, 138, 216),
+	[3] = Color3.fromRGB(138, 216, 255),
+	[4] = Color3.fromRGB(255, 168, 107),
+}
+
+function Renderer.removeNutrients(ids)
+	for _, id in ids do
+		local p = nutrientParts[id]
+		if p then
+			nutrientParts[id] = nil
+			p:Destroy()
+		end
+	end
+end
+
+-- Eaten nutrients fly into the eater and vanish.
+function Renderer.eatNutrient(nutrientId: number, eaterId: number)
+	local p = nutrientParts[nutrientId]
+	if not p then
+		return
+	end
+	nutrientParts[nutrientId] = nil
+	local v = views[eaterId]
+	if v then
+		local tw = TweenService:Create(p, TweenInfo.new(0.14), { Position = v.body.Position, Size = Vector3.one * 0.1 })
+		tw:Play()
+		tw.Completed:Once(function()
+			p:Destroy()
+		end)
+	else
+		p:Destroy()
+	end
+end
+
+local function syncNutrients(nutrients, t: number)
+	for id, n in nutrients do
+		local p = nutrientParts[id]
+		if not p then
+			if n.kind == 5 then
+				p = newPart(nil, { Size = Vector3.new(1.4, 1.4, 1.4), Color = Color3.fromRGB(159, 252, 255), Material = Enum.Material.Neon })
+			else
+				p = newPart(nil, { Shape = Enum.PartType.Ball, Size = Vector3.one * 1.1, Color = NUTRIENT_COLORS[n.kind] or NUTRIENT_COLORS[0], Material = Enum.Material.Neon })
+			end
+			nutrientParts[id] = p
+		end
+		local bob = math.sin(t * 1.3 + id * 0.7) * 0.15
+		p.CFrame = CFrame.new(n.x * S + bob, 0.2, n.y * S) * (if n.kind == 5 then CFrame.Angles(0, t + id, math.pi / 4) else CFrame.identity)
+	end
+end
+
+-- ------------------------------------------------------------ clouds + effects
+local cloudParts = {}
+
+local function syncClouds(clouds, t: number)
+	local seen = {}
+	for _, c in clouds do
+		seen[c.id] = true
+		local p = cloudParts[c.id]
+		if not p then
+			p = newPart(nil, { Shape = Enum.PartType.Cylinder, Color = Color3.fromRGB(158, 214, 30), Material = Enum.Material.Neon })
+			cloudParts[c.id] = p
+		end
+		local d = c.r * 2 * S * (1 + 0.03 * math.sin(t * 3 + c.id))
+		p.Size = Vector3.new(0.6, d, d)
+		p.Transparency = 1 - 0.35 * math.min(1, c.life * 2.5)
+		p.CFrame = CFrame.new(c.x * S, 0.6, c.y * S) * FLAT
+	end
+	for id, p in cloudParts do
+		if not seen[id] then
+			p:Destroy()
+			cloudParts[id] = nil
+		end
+	end
+end
+
+local fxPart = newPart(nil, { Transparency = 1, Size = Vector3.one * 0.2 })
+local emitter = Instance.new("ParticleEmitter")
+emitter.Enabled = false
+emitter.Lifetime = NumberRange.new(0.35, 0.8)
+emitter.Speed = NumberRange.new(8, 22)
+emitter.SpreadAngle = Vector2.new(180, 180)
+emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.6), NumberSequenceKeypoint.new(1, 0) })
+emitter.LightEmission = 1
+emitter.Drag = 4
+emitter.Parent = fxPart
+
+function Renderer.burst(x: number, y: number, n: number, color: Color3)
+	fxPart.CFrame = CFrame.new(x * S, 0.8, y * S)
+	emitter.Color = ColorSequence.new(color)
+	emitter:Emit(math.clamp(math.floor(n), 1, 60))
+end
+
+function Renderer.damageNumber(x: number, y: number, amount: number, color: Color3, big: boolean)
+	local a = newPart(nil, { Transparency = 1, Size = Vector3.one * 0.1, CFrame = CFrame.new(x * S, 1, y * S) })
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(80, 30)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.Parent = a
+	local tl = Instance.new("TextLabel")
+	tl.Size = UDim2.fromScale(1, 1)
+	tl.BackgroundTransparency = 1
+	tl.Font = Enum.Font.GothamBlack
+	tl.TextSize = if big then 22 else 15
+	tl.TextColor3 = color
+	tl.TextStrokeTransparency = 0.2
+	tl.Text = tostring(amount)
+	tl.Parent = bb
+	TweenService:Create(a, TweenInfo.new(0.85, Enum.EasingStyle.Cubic), { CFrame = a.CFrame + Vector3.new(0, 0, -3) }):Play()
+	TweenService:Create(tl, TweenInfo.new(0.85), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+	task.delay(0.9, function()
+		a:Destroy()
+	end)
+end
+
+-- ------------------------------------------------------------ frame
+-- `cells`: interpolated records by id. Returns nothing; moves everything.
+function Renderer.frame(cells, infos, nutrients, clouds, myId: number, t: number)
+	local parts, cfs = {}, {}
+	for id, s in cells do
+		local v = views[id] or newView(id)
+		v.missing = 0
+		local info = infos[id]
+		-- Rebuild organelle parts whenever the server bumps the cell's layout
+		-- version (new organelle, upgrade, crack stage change, level up).
+		local layoutKey = if info then `{info.version or 0}|{#info.organelles}` else 
+		if info and layoutKey ~= v.layoutKey then
+			v.layoutKey = layoutKey
+			buildOrganelles(v, info)
+		end
+		updateCell(v, s, info, t, parts, cfs, id == myId)
+	end
+	Workspace:BulkMoveTo(parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
+	for id, v in views do
+		if not cells[id] then
+			v.missing = (v.missing or 0) + 1
+			if v.missing > 20 then
+				destroyView(id)
+			end
+		end
+	end
+	syncNutrients(nutrients, t)
+	syncClouds(clouds, t)
+end
+
+return Renderer
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX15"><Properties><string name="Name">UI</string><ProtectedString name="Source"><![CDATA[-- All screen UI, built in code: menu, HUD, evolution panel with the
+-- organelle placement editor, and the death screen.
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Organelles = require(Shared.Organelles)
+local Placement = require(Shared.Placement)
+local Progression = require(Shared.Progression)
+local Stats = require(Shared.Stats)
+
+local UI = {}
+
+local ACCENT = Color3.fromRGB(94, 242, 214)
+local GOLD = Color3.fromRGB(255, 212, 94)
+local PANEL = Color3.fromRGB(8, 28, 36)
+local TEXT = Color3.fromRGB(230, 251, 255)
+local MUTED = Color3.fromRGB(143, 184, 194)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "CellIO"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local function make(class: string, props, children)
+	local inst = Instance.new(class)
+	for k, v in props do
+		if k ~= "Parent" then
+			(inst :: any)[k] = v
+		end
+	end
+	for _, c in children or {} do
+		c.Parent = inst
+	end
+	inst.Parent = props.Parent
+	return inst
+end
+
+local function corner(r: number)
+	return make("UICorner", { CornerRadius = UDim.new(0, r) })
+end
+
+local function panel(props)
+	props.BackgroundColor3 = props.BackgroundColor3 or PANEL
+	props.BackgroundTransparency = props.BackgroundTransparency or 0.2
+	props.BorderSizePixel = 0
+	return make("Frame", props, { corner(12), make("UIStroke", { Color = ACCENT, Transparency = 0.8, Thickness = 1 }) })
+end
+
+local function label(props)
+	props.BackgroundTransparency = 1
+	props.Font = props.Font or Enum.Font.GothamMedium
+	props.TextColor3 = props.TextColor3 or TEXT
+	props.TextSize = props.TextSize or 14
+	props.TextXAlignment = props.TextXAlignment or Enum.TextXAlignment.Left
+	props.TextWrapped = if props.TextWrapped == nil then true else props.TextWrapped
+	return make("TextLabel", props)
+end
+
+local function button(props, onClick)
+	props.BackgroundColor3 = props.BackgroundColor3 or Color3.fromRGB(30, 60, 70)
+	props.AutoButtonColor = true
+	props.Font = props.Font or Enum.Font.GothamBold
+	props.TextColor3 = props.TextColor3 or TEXT
+	props.TextSize = props.TextSize or 16
+	props.BorderSizePixel = 0
+	local b = make("TextButton", props, { corner(10) })
+	b.Activated:Connect(onClick)
+	return b
+end
+
+-- ------------------------------------------------------------ menu
+local menu = panel({ Size = UDim2.fromOffset(560, 420), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), Parent = gui })
+make("UISizeConstraint", { MaxSize = Vector2.new(560, 420), Parent = menu })
+label({ Text = "CELL<font color=\"#ffd45e\">.IO</font>", RichText = true, Font = Enum.Font.GothamBlack, TextSize = 64, TextColor3 = ACCENT, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 80), Position = UDim2.fromOffset(0, 16), Parent = menu })
+label({ Text = "Grow. Evolve. Design your organism.", TextColor3 = MUTED, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 24), Position = UDim2.fromOffset(0, 96), Parent = menu })
+local playBtn
+label({
+	Text = "<b>Steer</b>: mouse (or hold a finger on the screen)   <b>Space</b>: dash\n<b>Q</b>: toxin cloud   <b>R</b>: venom surge   <b>E</b>: evolve\n\nEat nutrients to grow and level up. Each level, pick an organelle and <b>attach it where you want</b>: front spikes ram, rear spikes punish chasers, armor only protects the side it covers, a flagellum pushes away from where it sits.",
+	RichText = true,
+	TextColor3 = TEXT,
+	TextSize = 15,
+	Size = UDim2.new(1, -48, 0, 150),
+	Position = UDim2.fromOffset(24, 136),
+	TextYAlignment = Enum.TextYAlignment.Top,
+	Parent = menu,
+})
+playBtn = button({ Text = "Play", Font = Enum.Font.GothamBlack, TextSize = 24, BackgroundColor3 = ACCENT, TextColor3 = Color3.fromRGB(3, 42, 38), Size = UDim2.fromOffset(200, 56), Position = UDim2.new(0.5, -100, 1, -88), Parent = menu }, function()
+	UI.callbacks.onPlay()
+end)
+
+-- ------------------------------------------------------------ HUD
+local hud = make("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Visible = false, Parent = gui })
+local stats = panel({ Size = UDim2.fromOffset(260, 170), Position = UDim2.fromOffset(12, 12), Parent = hud })
+local levelText = label({ Font = Enum.Font.GothamBlack, TextSize = 20, TextColor3 = GOLD, Size = UDim2.new(1, -20, 0, 24), Position = UDim2.fromOffset(10, 6), Parent = stats })
+local function bar(y: number, color: Color3)
+	local bg = make("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.5, BorderSizePixel = 0, Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, y), Parent = stats }, { corner(8) })
+	local fill = make("Frame", { BackgroundColor3 = color, BorderSizePixel = 0, Size = UDim2.fromScale(0.5, 1), Parent = bg }, { corner(8) })
+	local txt = label({ Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Center, TextSize = 11, Font = Enum.Font.GothamBold, Parent = bg })
+	txt.TextStrokeTransparency = 0.4
+	return fill, txt
+end
+local hpFill, hpText = bar(34, Color3.fromRGB(255, 93, 122))
+local enFill, enText = bar(54, Color3.fromRGB(255, 196, 60))
+local xpFill, xpText = bar(74, Color3.fromRGB(80, 200, 255))
+local capText = label({ TextColor3 = MUTED, TextSize = 12, Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 94), Parent = stats })
+local orgText = label({ TextSize = 12, Size = UDim2.new(1, -20, 0, 44), Position = UDim2.fromOffset(10, 112), TextYAlignment = Enum.TextYAlignment.Top, RichText = true, Parent = stats })
+local protectText = label({ TextColor3 = Color3.fromRGB(255, 247, 194), Font = Enum.Font.GothamBold, TextSize = 12, Size = UDim2.new(1, -20, 0, 14), Position = UDim2.fromOffset(10, 152), Parent = stats })
+
+local lbPanel = panel({ Size = UDim2.fromOffset(220, 250), Position = UDim2.new(1, -232, 0, 12), Parent = hud })
+label({ Text = "LEADERBOARD", TextColor3 = ACCENT, Font = Enum.Font.GothamBlack, TextSize = 13, Size = UDim2.new(1, -20, 0, 18), Position = UDim2.fromOffset(10, 8), Parent = lbPanel })
+local lbText = label({ RichText = true, TextSize = 13, Size = UDim2.new(1, -20, 1, -34), Position = UDim2.fromOffset(10, 28), TextYAlignment = Enum.TextYAlignment.Top, Parent = lbPanel })
+local feed = label({ RichText = true, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, TextYAlignment = Enum.TextYAlignment.Top, Size = UDim2.fromOffset(260, 100), Position = UDim2.new(1, -272, 0, 270), Parent = hud })
+local feedLines = {}
+local toastText = label({ Font = Enum.Font.GothamBlack, TextSize = 28, TextColor3 = GOLD, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 70), Position = UDim2.fromScale(0, 0.16), RichText = true, Parent = hud })
+toastText.TextStrokeTransparency = 0.3
+local spectateText = label({ Font = Enum.Font.GothamBlack, TextSize = 20, TextColor3 = Color3.fromRGB(255, 173, 185), TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 1, -130), Visible = false, Parent = hud })
+
+local abilityBar = make("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(340, 70), Position = UDim2.new(0.5, -170, 1, -84), Parent = hud }, {
+	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 10), HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+})
+local abilityButtons = {}
+for _, spec in { { "dash", "Dash", "Space" }, { "toxin", "Toxin", "Q" }, { "venom", "Venom", "R" }, { "evolve", "Evolve", "E" } } do
+	local key, name, hint = spec[1], spec[2], spec[3]
+	local b = button({ Text = "", Size = UDim2.fromOffset(76, 64), BackgroundColor3 = PANEL, Parent = abilityBar }, function()
+		if key == "evolve" then
+			UI.callbacks.onEvolveOpen()
+		else
+			UI.callbacks.onAbility(key)
+		end
+	end)
+	label({ Text = hint, TextColor3 = MUTED, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 14), Position = UDim2.fromOffset(0, 8), Parent = b })
+	label({ Text = name, Font = Enum.Font.GothamBlack, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 20), Position = UDim2.fromOffset(0, 26), Parent = b })
+	local cd = make("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.45, BorderSizePixel = 0, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.fromScale(1, 0), Parent = b })
+	abilityButtons[key] = { button = b, cd = cd }
+end
+
+-- ------------------------------------------------------------ evolution panel
+local evo = panel({ Size = UDim2.fromOffset(860, 520), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), Visible = false, BackgroundTransparency = 0.05, Parent = gui })
+make("UISizeConstraint", { MaxSize = Vector2.new(860, 520), Parent = evo })
+local evoTitle = label({ Text = "Evolution", Font = Enum.Font.GothamBlack, TextSize = 26, TextColor3 = GOLD, Size = UDim2.new(1, -220, 0, 34), Position = UDim2.fromOffset(18, 12), Parent = evo })
+local evoProtect = label({ TextColor3 = Color3.fromRGB(255, 247, 194), Font = Enum.Font.GothamBold, TextSize = 13, Size = UDim2.fromOffset(200, 18), Position = UDim2.new(1, -330, 0, 20), Parent = evo })
+button({ Text = "Later", Size = UDim2.fromOffset(90, 34), Position = UDim2.new(1, -108, 0, 12), Parent = evo }, function()
+	UI.hideEvolution()
+	UI.callbacks.onEvolveClose()
+end)
+local cardsFrame = make("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -36, 1, -70), Position = UDim2.fromOffset(18, 56), Parent = evo }, {
+	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 12) }),
+})
+local editor = make("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -36, 1, -70), Position = UDim2.fromOffset(18, 56), Visible = false, Parent = evo })
+
+local PREVIEW = 300
+local R_PREVIEW = 100
+local cellView = make("Frame", { BackgroundColor3 = Color3.fromRGB(20, 60, 70), BackgroundTransparency = 0.3, Size = UDim2.fromOffset(PREVIEW, PREVIEW), Position = UDim2.fromOffset(0, 20), Parent = editor }, { corner(PREVIEW // 2) })
+local cellBody = make("Frame", { BackgroundColor3 = Color3.fromRGB(110, 210, 140), BackgroundTransparency = 0.45, Size = UDim2.fromOffset(R_PREVIEW * 2, R_PREVIEW * 2), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Parent = cellView }, {
+	corner(R_PREVIEW),
+	make("UIStroke", { Color = Color3.fromRGB(190, 255, 210), Thickness = 3 }),
+})
+label({ Text = "FRONT ▶", Font = Enum.Font.GothamBlack, TextSize = 13, TextColor3 = MUTED, Size = UDim2.fromOffset(80, 16), Position = UDim2.new(1, -80, 0.5, -30), Parent = cellView })
+label({ Text = "REAR", Font = Enum.Font.GothamBlack, TextSize = 13, TextColor3 = MUTED, Size = UDim2.fromOffset(60, 16), Position = UDim2.new(0, 6, 0.5, -30), Parent = cellView })
+local slotLayer = make("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = cellView })
+local tiltRow = make("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(PREVIEW, 36), Position = UDim2.fromOffset(0, PREVIEW + 30), Parent = editor })
+local tiltText = label({ Text = "Tilt 0°", TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromOffset(100, 36), Position = UDim2.fromOffset(100, 0), Font = Enum.Font.GothamBold, Parent = tiltRow })
+local edName = label({ Font = Enum.Font.GothamBlack, TextSize = 20, TextColor3 = ACCENT, Size = UDim2.new(1, -330, 0, 26), Position = UDim2.fromOffset(330, 16), Parent = editor })
+local edDesc = label({ TextSize = 14, Size = UDim2.new(1, -330, 0, 40), Position = UDim2.fromOffset(330, 44), TextYAlignment = Enum.TextYAlignment.Top, Parent = editor })
+local edPlace = label({ TextSize = 13, TextColor3 = MUTED, Size = UDim2.new(1, -330, 0, 44), Position = UDim2.fromOffset(330, 86), TextYAlignment = Enum.TextYAlignment.Top, Parent = editor })
+local edStats = label({ RichText = true, TextSize = 13, Font = Enum.Font.Code, Size = UDim2.new(1, -330, 0, 200), Position = UDim2.fromOffset(330, 134), TextYAlignment = Enum.TextYAlignment.Top, Parent = editor })
+local edError = label({ TextSize = 13, TextColor3 = Color3.fromRGB(255, 120, 140), Size = UDim2.new(1, -330, 0, 18), Position = UDim2.new(0, 330, 1, -70), Parent = editor })
+
+local state = { offers = {}, selected = nil, slot = 0, tilt = 0, open = false }
+
+local function myOrganelles()
+	local Net = UI.net
+	local info = Net.infos[Net.myId]
+	local list = {}
+	if info then
+		for i, o in info.organelles do
+			list[i] = { type = o.type, level = o.level, slot = o.slot, tilt = o.tilt }
+		end
+	end
+	return list
+end
+
+local function candidate()
+	local orgs = myOrganelles()
+	local o = state.offers[state.selected]
+	local you = UI.net.you
+	local biomass = if you then you.biomass else 10
+	local mut = { vitality = 0, metabolism = 0 }
+	local ghost = nil
+	if o.kind == "new" then
+		table.insert(orgs, { type = o.type, level = 1, slot = state.slot, tilt = if Placement.isSurface(o.type) then state.tilt else 0 })
+		ghost = #orgs
+	elseif o.kind == "upgrade" and orgs[o.index] then
+		orgs[o.index].level = o.toLevel
+		ghost = o.index
+	elseif o.mutation == "growth" then
+		biomass += 20
+	else
+		mut[o.mutation] = 1
+	end
+	return orgs, ghost, biomass, mut
+end
+
+local function fmt(v: number, kind: string): string
+	if kind == "pct" then
+		return `{math.round(v * 100)}%`
+	elseif kind == "deg" then
+		return `{math.round(math.deg(v))}°/s`
+	end
+	return string.format("%.1f", v)
+end
+
+local function renderPreview()
+	local you = UI.net.you
+	if not you or not state.selected then
+		return
+	end
+	local beforeS = Stats.compute(you.biomass, you.level, myOrganelles())
+	local orgs, ghost, biomass, mut = candidate()
+	local afterS = Stats.compute(biomass, you.level, orgs, mut)
+	local function summary(s)
+		local function rearSpike()
+			local d = Stats.deliveryAt(s, math.pi)
+			return if d then d.damage else 0
+		end
+		local function frontSpike()
+			local d = Stats.deliveryAt(s, 0)
+			return if d then d.damage else 0
+		end
+		return {
+			{ "Speed forward", s.baseSpeed * Stats.thrustMultiplier(s, 0), "num" },
+			{ "Speed sideways", s.baseSpeed * math.max(Stats.thrustMultiplier(s, math.pi / 2), Stats.thrustMultiplier(s, -math.pi / 2)), "num" },
+			{ "Turning", s.turnRate, "deg" },
+			{ "Max HP", s.maxHp, "num" },
+			{ "Energy regen", s.energyRegen, "num" },
+			{ "Armor front", 1 - Stats.armorMultiplier(s, 0), "pct" },
+			{ "Armor rear", 1 - Stats.armorMultiplier(s, math.pi), "pct" },
+			{ "Spike front", frontSpike(), "num" },
+			{ "Spike rear", rearSpike(), "num" },
+		}
+	end
+	local a, b = summary(beforeS), summary(afterS)
+	local lines = { "<b>                 now     after</b>" }
+	for i, row in a do
+		local before, after = row[2], b[i][2]
+		local color = if math.abs(after - before) < 1e-3 then "#e6fbff" elseif after > before then "#7dffb5" else "#ff8fa3"
+		table.insert(lines, `{string.format("%-15s", row[1])}{string.format("%7s", fmt(before, row[3]))}   <font color="{color}">{fmt(after, row[3])}</font>`)
+	end
+	edStats.Text = table.concat(lines, "\n")
+
+	-- Slot markers and organelle dots on the preview cell.
+	for _, c in slotLayer:GetChildren() do
+		c:Destroy()
+	end
+	local c0 = PREVIEW / 2
+	local function at(lx: number, ly: number): UDim2
+		return UDim2.fromOffset(c0 + lx * R_PREVIEW, c0 + ly * R_PREVIEW)
+	end
+	for i, o in orgs do
+		local lx, ly = Placement.localPos(o)
+		local def = Organelles.DEFS[o.type]
+		local size = if def.mount == "surface" then 22 else 26
+		local dot = make("Frame", { Size = UDim2.fromOffset(size, size), AnchorPoint = Vector2.new(0.5, 0.5), Position = at(lx, ly), BackgroundColor3 = def.color, BorderSizePixel = 0, ZIndex = 3, Parent = slotLayer }, { corner(size // 2) })
+		if i == ghost then
+			make("UIStroke", { Color = GOLD, Thickness = 3, Parent = dot })
+		end
+		-- Direction tick for surface organelles (shows tilt).
+		if def.mount == "surface" then
+			local d = Placement.direction(o)
+			make("Frame", { Size = UDim2.fromOffset(4, 4), AnchorPoint = Vector2.new(0.5, 0.5), Position = at(lx + math.cos(d) * 0.28, ly + math.sin(d) * 0.28), BackgroundColor3 = def.color, BorderSizePixel = 0, ZIndex = 3, Parent = slotLayer }, { corner(2) })
+		end
+		label({ Text = string.sub(def.name, 1, 2), TextXAlignment = Enum.TextXAlignment.Center, Font = Enum.Font.GothamBlack, TextSize = 10, TextColor3 = Color3.fromRGB(10, 20, 24), Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = dot })
+	end
+	local o = state.offers[state.selected]
+	if o.kind == "new" then
+		local valid = Placement.validSlots(myOrganelles(), o.type)
+		for _, s in valid do
+			local lx, ly = Placement.localPos({ type = o.type, slot = s })
+			local b = button({ Text = "", Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0.5, 0.5), Position = at(lx * (if Placement.isSurface(o.type) then 1.22 else 1), ly * (if Placement.isSurface(o.type) then 1.22 else 1)), BackgroundColor3 = if s == state.slot then GOLD else ACCENT, BackgroundTransparency = 0.2, ZIndex = 5, Parent = slotLayer }, function()
+				state.slot = s
+				renderPreview()
+			end)
+			b:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0.5, 0)
+		end
+		local err = Placement.check(myOrganelles(), o.type, state.slot, if Placement.isSurface(o.type) then state.tilt else 0, if you then you.capacity else 0)
+		edError.Text = if err then `Cannot attach here ({err}).` else ""
+	else
+		edError.Text = ""
+	end
+end
+
+local tiltLeft = button({ Text = "⟲", Size = UDim2.fromOffset(60, 36), Position = UDim2.fromOffset(30, 0), Parent = tiltRow }, function()
+	state.tilt = math.max(-Placement.MAX_TILT, state.tilt - Placement.TILT_STEP)
+	tiltText.Text = `Tilt {math.round(math.deg(state.tilt))}°`
+	renderPreview()
+end)
+local tiltRight = button({ Text = "⟳", Size = UDim2.fromOffset(60, 36), Position = UDim2.fromOffset(210, 0), Parent = tiltRow }, function()
+	state.tilt = math.min(Placement.MAX_TILT, state.tilt + Placement.TILT_STEP)
+	tiltText.Text = `Tilt {math.round(math.deg(state.tilt))}°`
+	renderPreview()
+end)
+local _ = tiltLeft, tiltRight
+
+local function showCards()
+	state.selected = nil
+	editor.Visible = false
+	cardsFrame.Visible = true
+	for _, c in cardsFrame:GetChildren() do
+		if c:IsA("GuiObject") then
+			c:Destroy()
+		end
+	end
+	local width = (860 - 36 - 12 * (#state.offers - 1)) / #state.offers
+	for i, o in state.offers do
+		local tag, desc, meta = "", "", ""
+		if o.kind == "mutation" then
+			tag = "MUTATION"
+			desc = Progression.MUTATIONS[o.mutation].text
+			meta = "Free: uses no capacity."
+		else
+			local def = Organelles.DEFS[o.type]
+			local lvl = if o.kind == "upgrade" then o.toLevel else 1
+			tag = (if o.kind == "upgrade" then "UPGRADE · " else "NEW · ") .. string.upper(def.role)
+			desc = def.levelText[lvl]
+			meta = `{if def.mount == "surface" then "Surface" else "Internal"} · cost {def.slotCost} · weight {math.round(def.weight * 100)}%`
+		end
+		local card = button({ Text = "", Size = UDim2.new(0, width, 1, 0), BackgroundColor3 = Color3.fromRGB(20, 44, 52), Parent = cardsFrame }, function()
+			UI.select(i)
+		end)
+		if o.kind ~= "mutation" then
+			make("Frame", { Size = UDim2.fromOffset(70, 70), Position = UDim2.new(0.5, -35, 0, 16), BackgroundColor3 = Organelles.DEFS[o.type].color, Parent = card }, { corner(35) })
+		end
+		label({ Text = tag, TextColor3 = ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 100), Parent = card })
+		label({ Text = Progression.offerTitle(o), Font = Enum.Font.GothamBlack, TextSize = 18, Size = UDim2.new(1, -20, 0, 24), Position = UDim2.fromOffset(10, 118), Parent = card })
+		label({ Text = meta, TextColor3 = MUTED, TextSize = 11, Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 144), Parent = card })
+		label({ Text = desc, TextSize = 14, Size = UDim2.new(1, -20, 0, 120), Position = UDim2.fromOffset(10, 166), TextYAlignment = Enum.TextYAlignment.Top, Parent = card })
+	end
+end
+
+function UI.select(i: number)
+	local o = state.offers[i]
+	state.selected = i
+	state.tilt = 0
+	tiltText.Text = "Tilt 0°"
+	cardsFrame.Visible = false
+	editor.Visible = true
+	edName.Text = Progression.offerTitle(o)
+	if o.kind == "mutation" then
+		edDesc.Text = Progression.MUTATIONS[o.mutation].text
+		edPlace.Text = ""
+		tiltRow.Visible = false
+	else
+		local def = Organelles.DEFS[o.type]
+		edDesc.Text = def.levelText[if o.kind == "upgrade" then o.toLevel else 1]
+		edPlace.Text = def.placement
+		tiltRow.Visible = o.kind == "new" and def.mount == "surface"
+		if o.kind == "new" then
+			local defaults = { spikes = 0, stinger = 0, membrane = 0, cilia = math.pi, flagellum = math.pi }
+			state.slot = Placement.nearestValidSlot(myOrganelles(), o.type, defaults[o.type] or 0, def.mount == "internal") or 0
+		end
+	end
+	renderPreview()
+end
+
+button({ Text = "Back", Size = UDim2.fromOffset(110, 40), Position = UDim2.new(1, -250, 1, -46), Parent = editor }, function()
+	showCards()
+end)
+button({ Text = "Confirm", Font = Enum.Font.GothamBlack, BackgroundColor3 = ACCENT, TextColor3 = Color3.fromRGB(3, 42, 38), Size = UDim2.fromOffset(130, 40), Position = UDim2.new(1, -130, 1, -46), Parent = editor }, function()
+	local o = state.offers[state.selected]
+	if not o then
+		return
+	end
+	local isNew = o.kind == "new"
+	UI.callbacks.onEvolveChoose(state.selected, if isNew then state.slot else nil, if isNew and Placement.isSurface(o.type) then state.tilt else 0)
+end)
+
+function UI.showEvolution(offers, level: number, pending: number)
+	state.offers = offers
+	state.open = true
+	evoTitle.Text = `Evolution  <font size="14" color="#8fb8c2">Level {level} · {pending} pending</font>`
+	evoTitle.RichText = true
+	evo.Visible = true
+	showCards()
+end
+
+function UI.hideEvolution()
+	state.open = false
+	evo.Visible = false
+end
+
+function UI.isEvolutionOpen(): boolean
+	return state.open
+end
+
+function UI.evolveError(err: string)
+	edError.Text = `Rejected by server: {err}`
+end
+
+-- ------------------------------------------------------------ death screen
+local death = panel({ Size = UDim2.fromOffset(520, 300), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), Visible = false, Parent = gui })
+label({ Text = "Your cell burst!", Font = Enum.Font.GothamBlack, TextSize = 32, TextColor3 = Color3.fromRGB(255, 93, 122), TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 40), Position = UDim2.fromOffset(0, 18), Parent = death })
+local deathBy = label({ TextColor3 = MUTED, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -20, 0, 20), Position = UDim2.fromOffset(10, 62), Parent = death })
+local deathStats = label({ RichText = true, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -20, 0, 110), Position = UDim2.fromOffset(10, 92), Parent = death })
+button({ Text = "Play again", Font = Enum.Font.GothamBlack, TextSize = 22, BackgroundColor3 = ACCENT, TextColor3 = Color3.fromRGB(3, 42, 38), Size = UDim2.fromOffset(220, 52), Position = UDim2.new(0.5, -110, 1, -72), Parent = death }, function()
+	UI.callbacks.onPlay()
+end)
+
+function UI.showDeath(stats)
+	local m = math.floor(stats.survivalTime / 60)
+	local s = math.floor(stats.survivalTime % 60)
+	deathBy.Text = if stats.killedBy then `Consumed by {stats.killedBy}. Peak biomass {stats.peakBiomass}.` else `Peak biomass {stats.peakBiomass}.`
+	deathStats.Text = `Survived <b>{m}:{string.format("%02d", s)}</b>   Level <b>{stats.level}</b>\nEliminated <b>{stats.kills}</b>   Biomass collected <b>{stats.biomassCollected}</b>`
+	death.Visible = true
+	hud.Visible = false
+end
+
+-- ------------------------------------------------------------ screens + HUD updates
+function UI.setScreen(screen: string)
+	menu.Visible = screen == "menu"
+	death.Visible = screen == "dead"
+	hud.Visible = screen == "playing"
+	if screen ~= "playing" then
+		UI.hideEvolution()
+	end
+end
+
+local toastUntil = 0
+function UI.toast(text: string, seconds: number?)
+	toastText.Text = text
+	toastText.TextTransparency = 0
+	toastUntil = os.clock() + (seconds or 1.8)
+end
+
+function UI.killfeed(text: string)
+	table.insert(feedLines, 1, text)
+	if #feedLines > 5 then
+		table.remove(feedLines)
+	end
+	feed.Text = table.concat(feedLines, "\n")
+	task.delay(5, function()
+		local idx = table.find(feedLines, text)
+		if idx then
+			table.remove(feedLines, idx)
+			feed.Text = table.concat(feedLines, "\n")
+		end
+	end)
+end
+
+function UI.setSpectate(text: string?)
+	spectateText.Visible = text ~= nil
+	spectateText.Text = text or ""
+end
+
+local function setBar(fill: Frame, txt: TextLabel, frac: number, text: string)
+	fill.Size = UDim2.fromScale(math.clamp(frac, 0, 1), 1)
+	txt.Text = text
+end
+
+local function setCooldown(key: string, frac: number, enabled: boolean)
+	local a = abilityButtons[key]
+	a.cd.Size = UDim2.fromScale(1, math.clamp(frac, 0, 1))
+	a.button.BackgroundTransparency = if enabled then 0.1 else 0.6
+end
+
+function UI.updateHud(you, organelles, leaderboard, myId: number)
+	if os.clock() > toastUntil then
+		toastText.TextTransparency = 1
+	end
+	if not you then
+		return
+	end
+	levelText.Text = `Lv {you.level}   <font size="13" color="#8fb8c2">Biomass {math.round(you.biomass)} · {you.kills} kills</font>`
+	levelText.RichText = true
+	setBar(hpFill, hpText, you.hp / you.maxHp, `{math.min(you.maxHp, math.ceil(you.hp))} / {you.maxHp}`)
+	setBar(enFill, enText, you.energy / you.energyMax, `{math.floor(you.energy)} / {you.energyMax} energy`)
+	setBar(xpFill, xpText, you.xp / you.xpNext, `{you.xp} / {you.xpNext} XP`)
+	capText.Text = `Organelle capacity {you.capacityUsed} / {you.capacity}`
+	local chips = {}
+	for _, o in organelles do
+		local def = Organelles.DEFS[o.type]
+		table.insert(chips, `<font color="#{def.color:ToHex()}">●</font> {def.name} {string.rep("I", o.level)}`)
+	end
+	orgText.Text = table.concat(chips, "   ")
+	protectText.Text = if you.protectedFor > 0 then `Protected {string.format("%.1f", you.protectedFor)} s` else ""
+	setCooldown("dash", you.dashCd / 2.6, true)
+	setCooldown("toxin", you.toxinCd / Organelles.TUNING.toxinCooldown, you.hasToxin)
+	setCooldown("venom", you.venomCd / Organelles.TUNING.venomSurgeCooldown, you.hasVenom)
+	setCooldown("evolve", 0, you.pendingEvolutions > 0)
+	abilityButtons.evolve.button.BackgroundColor3 = if you.pendingEvolutions > 0 then Color3.fromRGB(90, 70, 20) else PANEL
+
+	local lines = {}
+	for i, e in leaderboard do
+		local line = `{i}. {e.name} ({e.level})  <font color="#8fb8c2">{e.biomass}</font>`
+		if e.id == myId then
+			line = `<font color="#ffd45e"><b>{line}</b></font>`
+		end
+		table.insert(lines, line)
+	end
+	lbText.Text = table.concat(lines, "\n")
+	if state.open then
+		evoProtect.Text = if you.protectedFor > 0 then `Protected {string.format("%.1f", you.protectedFor)} s` else "Not protected!"
+	end
+end
+
+function UI.init(net, callbacks)
+	UI.net = net
+	UI.callbacks = callbacks
+	UI.setScreen("menu")
+end
+
+return UI
+]]></ProtectedString></Properties></Item></Item></Item></Item><Item class="Players" referent="RBX21"><Properties><string name="Name">Players</string><bool name="CharacterAutoLoads">false</bool></Properties></Item></roblox>

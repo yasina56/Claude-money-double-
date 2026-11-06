@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>CELL.IO</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="game"></div>
+
+    <!-- Main menu -->
+    <div id="menu" class="overlay">
+      <div class="menu-card">
+        <h1 class="logo">CELL<span>.IO</span></h1>
+        <p class="tagline">Grow. Evolve. Design your organism.</p>
+        <form id="join-form" autocomplete="off">
+          <input id="name-input" maxlength="16" placeholder="Name your cell" />
+          <button id="play-btn" type="submit" class="primary big">Play</button>
+        </form>
+        <p id="conn-status" class="muted">Connecting&hellip;</p>
+        <p class="menu-links"><a id="mode-link" class="hidden button-link" href="?online">Play online</a> <button id="menu-settings" class="ghost" type="button">Settings</button></p>
+        <div class="howto">
+          <div>
+            <h3>Controls</h3>
+            <ul>
+              <li><b>Mouse</b>: steer (distance = speed)</li>
+              <li><b>Space</b>: dash burst</li>
+              <li><b>Q</b>: toxin cloud (needs a Toxin Gland)</li>
+              <li><b>R</b>: venom surge (needs a linked Venom Sac)</li>
+              <li><b>E</b>: open evolution</li>
+              <li><b>M</b>: mute</li>
+              <li><b>F3</b>: network stats</li>
+            </ul>
+          </div>
+          <div>
+            <h3>How to play</h3>
+            <ul>
+              <li>Eat nutrients for <b>biomass</b> (size) and <b>XP</b> (level).</li>
+              <li>Each level, pick an organelle and <b>attach it</b> where you want.</li>
+              <li>Placement matters: front spikes ram, rear spikes punish chasers, armor only protects the side it covers.</li>
+              <li>Glowing crystals near acid pools give lots of XP.</li>
+            </ul>
+          </div>
+        </div>
+        <p class="builds">Try a <b>Hunter</b> (front spikes, flagellum, venom), a <b>Tank</b> (armor, regen, mitochondria), a <b>Speedster</b> (cilia clusters, flagellum) or a <b>Toxic Defender</b> (toxin, armor, regen).</p>
+      </div>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+      <div id="stats-panel" class="panel">
+        <div class="lvl-row"><span id="hud-level" class="lvl">Lv 1</span><span id="hud-biomass">Biomass 10</span><span id="hud-kills">0 kills</span></div>
+        <div class="bar hp"><div class="fill"></div><span class="label"></span></div>
+        <div class="bar en"><div class="fill"></div><span class="label"></span></div>
+        <div class="bar xp"><div class="fill"></div><span class="label"></span></div>
+        <div id="hud-capacity" class="muted small"></div>
+        <div id="hud-organelles"></div>
+        <div id="hud-protect" class="protect hidden"></div>
+      </div>
+      <div id="leaderboard" class="panel"><h4>Leaderboard</h4><ol></ol></div>
+      <div id="killfeed"></div>
+      <div id="abilities">
+        <button class="ability" id="ab-dash" title="Dash burst"><span class="key">Space</span><span class="name">Dash</span><div class="cd"></div></button>
+        <button class="ability" id="ab-toxin" title="Toxin cloud"><span class="key">Q</span><span class="name">Toxin</span><div class="cd"></div></button>
+        <button class="ability" id="ab-venom" title="Venom surge: 3 s of double poison"><span class="key">R</span><span class="name">Venom</span><div class="cd"></div></button>
+        <button class="ability" id="ab-evolve" title="Evolve"><span class="key">E</span><span class="name">Evolve</span><span class="badge hidden">1</span></button>
+      </div>
+      <canvas id="minimap" width="150" height="150"></canvas>
+      <div id="toast"></div>
+      <div id="netdbg" class="hidden"></div>
+      <canvas id="threats"></canvas>
+      <div id="joystick" class="hidden"><div class="knob"></div></div>
+      <div id="spectate" class="hidden"></div>
+      <div id="tutorial" class="panel hidden">
+        <div class="tut-head"><b>First evolution</b><button id="tut-skip" class="ghost small">Skip tutorial</button></div>
+        <ol id="tut-steps">
+          <li data-step="eat">Eat 8 nutrients <span class="muted">(steer with the mouse)</span></li>
+          <li data-step="level">Reach level 2 <span class="muted">(nutrients give double XP for now)</span></li>
+          <li data-step="place">Pick an organelle and attach it to your cell</li>
+          <li data-step="dash">Dash with <b>Space</b> (or the Dash button)</li>
+        </ol>
+        <div class="tut-bar"><div></div></div>
+      </div>
+      <button id="mute-btn" class="icon-btn" title="Mute (M)">&#128266;</button>
+      <button id="settings-btn" class="icon-btn" title="Settings">&#9881;</button>
+    </div>
+
+    <!-- Evolution -->
+    <div id="evolution" class="overlay hidden">
+      <div class="evo-panel">
+        <header>
+          <h2>Evolution <small id="evo-level"></small></h2>
+          <span id="evo-protect" class="protect"></span>
+          <button id="evo-close" class="ghost">Later (Esc)</button>
+        </header>
+        <div id="evo-choose">
+          <p class="muted">Choose one adaptation. New organelles are attached by hand in the next step.</p>
+          <div id="evo-cards"></div>
+        </div>
+        <div id="evo-place" class="hidden">
+          <div class="evo-editor">
+            <canvas id="evo-canvas" width="460" height="460"></canvas>
+            <div class="evo-tools" id="evo-tools">
+              <button id="evo-rot-l" title="Tilt left (Q / wheel)">&#10226; Q</button>
+              <span id="evo-tilt">Tilt 0&deg;</span>
+              <button id="evo-rot-r" title="Tilt right (E / wheel)">E &#10227;</button>
+            </div>
+            <p class="muted small" id="evo-hint">Drag or click to attach. The arrow marks your cell's front.</p>
+          </div>
+          <div class="evo-side">
+            <h3 id="evo-name"></h3>
+            <p id="evo-desc"></p>
+            <p id="evo-placement" class="muted small"></p>
+            <table id="evo-preview"></table>
+            <div class="evo-actions">
+              <button id="evo-back" class="ghost">Back</button>
+              <button id="evo-confirm" class="primary">Confirm</button>
+            </div>
+            <p id="evo-error" class="error"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="settings" class="overlay hidden">
+      <div class="menu-card settings-card">
+        <h2>Settings</h2>
+        <label class="row"><span>Mute everything</span><input type="checkbox" id="set-mute" /></label>
+        <label class="row"><span>Music volume</span><input type="range" id="set-music" min="0" max="1" step="0.05" /></label>
+        <label class="row"><span>Effects volume</span><input type="range" id="set-sfx" min="0" max="1" step="0.05" /></label>
+        <label class="row"><span>Show names</span><input type="checkbox" id="set-names" /></label>
+        <label class="row"><span>Reduce effects <small class="muted">(fewer particles, no screen shake)</small></span><input type="checkbox" id="set-reduce" /></label>
+        <div class="row"><span>Tutorial</span><button id="set-tutorial" class="ghost" type="button">Play it again next round</button></div>
+        <button id="settings-close" class="primary" type="button">Done</button>
+      </div>
+    </div>
+
+    <!-- Death screen -->
+    <div id="death" class="overlay hidden">
+      <div class="menu-card death-card">
+        <h2>Your cell burst!</h2>
+        <p id="death-by" class="muted"></p>
+        <div class="death-stats">
+          <div><b id="d-time">0:00</b><span>Survived</span></div>
+          <div><b id="d-level">1</b><span>Final level</span></div>
+          <div><b id="d-kills">0</b><span>Eliminated</span></div>
+          <div><b id="d-biomass">0</b><span>Biomass collected</span></div>
+        </div>
+        <button id="again-btn" class="primary big">Play again</button>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

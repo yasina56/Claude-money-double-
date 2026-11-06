@@ -1,0 +1,71 @@
+# CELL.IO CI: typecheck, tests and the end-to-end smoke test on every push and PR
+# that touches the game, then publish the solo build to GitHub Pages from the
+# default branch.
+#
+# One-time setup for Pages: Settings > Pages > Build and deployment > Source:
+# "GitHub Actions". Optional: set a repository variable CELLIO_SERVER_URL
+# (Settings > Secrets and variables > Actions > Variables) to the deployed
+# server, e.g. https://cell-io.onrender.com, to enable "Play online".
+name: CELL.IO
+
+on:
+  push:
+    paths: ["cell-io/**", ".github/workflows/cellio.yml"]
+  pull_request:
+    paths: ["cell-io/**", ".github/workflows/cellio.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: cellio-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: cell-io
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cell-io/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run smoke
+
+  pages:
+    needs: check
+    # Only the default branch publishes (pushes or a manual run).
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cell-io/package-lock.json
+      - run: npm ci
+      - run: npm run build:solo
+        env:
+          VITE_SERVER_URL: ${{ vars.CELLIO_SERVER_URL }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: cell-io/dist/solo
+      - id: deploy
+        uses: actions/deploy-pages@v4

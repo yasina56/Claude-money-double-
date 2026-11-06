@@ -1,0 +1,16 @@
+# Render blueprint for the CELL.IO game server (free tier).
+# New > Blueprint in the Render dashboard, pick this repo, and Render reads this file.
+services:
+  - type: web
+    name: cell-io
+    runtime: docker
+    plan: free
+    rootDir: cell-io
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+    # Render sets PORT for the container; server/index.ts reads it.

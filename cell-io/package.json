@@ -1,0 +1,35 @@
+{
+  "name": "cell-io",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CELL.IO: a multiplayer browser evolution game where organelle placement shapes how your cell moves and fights.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "vite",
+    "build": "vite build",
+    "build:solo": "VITE_SOLO=1 vite build",
+    "build:offline": "npm run build:solo",
+    "smoke": "tsx scripts/smoke.ts",
+    "bench": "tsx scripts/bench.ts",
+    "sim": "tsx scripts/sim.ts",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run smoke"
+  },
+  "dependencies": {
+    "phaser": "^3.80.1",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}
