@@ -99,3 +99,20 @@ Everything comes from the `PURCHASES` table at the top of `animation.py`:
 Change an item, price, entrance animation, camera move, stage or screen time, and the timeline, HUD, camera, effects and validation all follow. To swap a procedural model for a licensed asset, drop `assets/<name>.glb` in (for example `assets/private_jet.glb`); it is auto-scaled and animated the same way.
 
 Prices are illustrative U.S. estimates, labelled "EST. PRICE ~" on screen. Sources are in STORYBOARD.md §7.
+
+## Bonus: Hydraulic press vs. 1 ball (`ball_split/split_press.py`)
+
+A separate 2D physics animation: a press keeps slamming down in a glass box. Every ball it crushes splits into **more** balls than the last generation did (×2, ×3, ×4, ×5, ×6, ×7), and every new generation is **smaller**. One ball becomes 2 → 6 → 24 → 120 → 720 → **5,040**.
+
+- 1080×1920, 60 fps, about 33 s, with synthesized pop and slam sounds (higher pitch for smaller balls).
+- Pure Python: NumPy + SciPy for the physics, Pillow for drawing, FFmpeg for encoding. No Blender needed.
+
+```bash
+pip install numpy pillow scipy        # ffmpeg must be on PATH
+python3 ball_split/split_press.py -o split_press.mp4          # about 2.5 min on 4 cores
+python3 ball_split/split_press.py --still 5 12 20             # PNG stills only
+```
+
+Tune the escalation in `RADII` (size per generation) and `SPLIT` (children per crushed ball) at the top of the script. `--seed` changes the bounces, and `--preview` renders at half resolution.
+
+![split press preview](docs/preview_split_press.png)
