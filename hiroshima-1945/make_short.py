@@ -52,8 +52,9 @@ SEGMENTS = [
      [("lanterns", 17)]),
 ]
 # lines spoken together, and the silence after each (the long one is the flash)
-UTTERANCES = [([0], 0.6), ([1], 0.3), ([2], 0.55), ([3], 1.4), ([4], 0.5), ([5], 0.6), ([6], 0.6),
+UTTERANCES = [([0], 0.6), ([1], 0.3), ([2], 0.55), ([3], 2.6), ([4], 0.5), ([5], 0.6), ([6], 0.6),
               ([7], 0.55), ([8], 0.6), ([9], 0.8), ([10], 0.8), ([11], 0.0)]
+SHOT_LEAD = {"blast": 1.3}
 SAY = {"pika-don.": "peeka don.", "hibakusha,": "hibbakusha,"}  # pronunciation hints for the TTS only
 SPEED = 0.86
 SOURCES = "Based on survivor accounts  ·  Sources: Hiroshima Peace Memorial Museum, ICRC"
@@ -456,12 +457,15 @@ def pedestrians(t, n=14, seed=1, z0=-6, z1=-60, slow=1.0):
     return out
 
 
-def street_world(ctx, cam, t, light=DAY, extra=(), tram_z=None, damage=0.0):
+def street_world(ctx, cam, t, light=DAY, extra=(), tram_z=None, wave=None, after_sky=None):
+    """The 1945 street. wave = z of the shockwave front: houses it has passed are knocked flat."""
     sky(ctx, *SKY_DAY, cam)
+    if after_sky:
+        after_sky()
     fog = (SKY_DAY[1], 25, 260, 0.65)
     draw_polys(ctx, cam, light, ground_polys("street"), fog)
     world = Model()
-    if damage <= 0:
+    if wave is None:
         world.add(static("city", city_intact))
     else:
         world.add(static("mtn", mountains))
@@ -469,7 +473,7 @@ def street_world(ctx, cam, t, light=DAY, extra=(), tram_z=None, damage=0.0):
         for i, z in enumerate(STREET_Z):
             for side in (-1, 1):
                 h, (x0, zf) = house(i, side, z)
-                d = clamp(damage * 1.6 - (z + 60) / -60 * 0.0 - rnd(i * 2 + side, 9) * 0.5)
+                d = smooth((wave - z) / 9 - rnd(i * 2 + side, 9) * 0.3)
                 h.xform(rot_x(1.25 * d) @ rot_z(-side * 0.3 * d), t=(0, 0, 4 * d * d), pivot=(x0, 0, zf))
                 world.add(h)
     if tram_z is not None:
@@ -477,7 +481,7 @@ def street_world(ctx, cam, t, light=DAY, extra=(), tram_z=None, damage=0.0):
     for e in extra:
         world.add(e)
     draw_model(ctx, cam, light, world, fog)
-    if damage <= 0:
+    if wave is None:
         wires(ctx, cam)
 
 
@@ -549,61 +553,187 @@ def shot_sky(ctx, t, d, gt):
     plane(ctx, cam, t, gt)
 
 
+FIREBALL = np.array([60.0, 560.0, -1700.0])  # roughly 600 m up, a couple of kilometres ahead
+WAVE_FROM = -200.0  # where the shockwave first appears down the street
+
+
 def flash_amount(gt):
-    f = TL["events"]["flash"]
-    dt = gt - f
+    """One white-out: a fast rise, a short hold, then a slow fade (no strobing)."""
+    dt = gt - TL["events"]["flash"]
     if dt < 0:
         return 0.0
     if dt < 0.12:
         return dt / 0.12
-    return max(0.0, math.exp(-(dt - 0.5) * 1.3)) if dt > 0.5 else 1.0
+    return max(0.0, math.exp(-(dt - 0.5) * 1.6)) if dt > 0.5 else 1.0
+
+
+def wave_z(gt):
+    """Where the shockwave front is along the street (z), racing toward the camera and arriving at impact."""
+    ev = TL["events"]
+    start, imp = ev["flash"] + 0.9, ev["impact"]
+    u = clamp((gt - start) / (imp - start))
+    return WAVE_FROM + (-1.6 - WAVE_FROM) * u ** 1.3 + max(0.0, gt - imp) * 70
+
+
+def fireball(ctx, cam, since):
+    """The fireball over the city: white, then yellow and orange, swelling and rising, with a heat glow."""
+    if since <= 0:
+        return
+    grow = 1 - math.exp(-since * 2.2)
+    c = FIREBALL + np.array([0, 40 * since, 0])
+    sp, sc = project(cam, c)
+    if sp is None:
+        return
+    r = (40 + 230 * grow) * sc
+    warm = clamp(since / 2.5)
+    ctx.save()
+    ctx.set_operator(cairo.OPERATOR_ADD)
+    g = cairo.RadialGradient(sp[0], sp[1], r * 0.3, sp[0], sp[1], r * 4.5)
+    g.add_color_stop_rgba(0, 1, 0.7 - 0.2 * warm, 0.35 - 0.2 * warm, 0.55)
+    g.add_color_stop_rgba(1, 1, 0.4, 0.1, 0)
+    ctx.set_source(g)
+    ctx.paint()
+    ctx.restore()
+    g = cairo.RadialGradient(sp[0] - r * 0.2, sp[1] - r * 0.25, 0, sp[0], sp[1], r)
+    g.add_color_stop_rgb(0, 1, 1, 0.92 - 0.3 * warm)
+    g.add_color_stop_rgb(0.45, 1, 0.82 - 0.25 * warm, 0.4 - 0.25 * warm)
+    g.add_color_stop_rgb(1, 0.95, 0.45 - 0.15 * warm, 0.12)
+    ctx.set_source(g)
+    ctx.arc(sp[0], sp[1], r, 0, TAU)
+    ctx.fill()
+    for k in range(14):  # soft churning billows inside the ball
+        a = k * 2.39996 + since * 0.4
+        dist = r * 0.62 * math.sqrt((k + 0.5) / 14)
+        bx, by = sp[0] + math.cos(a) * dist, sp[1] + math.sin(a) * dist
+        rr = r * (0.3 + 0.08 * math.sin(since * 2.3 + k))
+        g = cairo.RadialGradient(bx, by, 0, bx, by, rr)
+        g.add_color_stop_rgba(0, 1, 0.9 - 0.3 * warm, 0.55 - 0.3 * warm, 0.35)
+        g.add_color_stop_rgba(1, 0.95, 0.4, 0.1, 0)
+        ctx.set_source(g)
+        ctx.arc(bx, by, rr, 0, TAU)
+        ctx.fill()
+
+
+def dust_wall(ctx, cam, w, t, strength=1.0):
+    """The shockwave front: a churning wall of dust and debris spanning the street at z = w."""
+    blobs = []
+    for i in range(70):
+        x = -34 + 68 * rnd(i, 60)
+        y = 1 + 15 * rnd(i, 61) ** 1.4
+        z = w - 3 * rnd(i, 62) - 1.5 * math.sin(t * 3 + i)
+        blobs.append((z, x, y, 3.5 + 4.5 * rnd(i, 63), i))
+    for z, x, y, rad, i in sorted(blobs):  # far first
+        sp, sc = project(cam, (x, y, z))
+        if sp is None:
+            continue
+        r = rad * sc
+        lit = clamp(y / 22)  # tops catch the fireball's light
+        g = cairo.RadialGradient(sp[0], sp[1] - r * 0.3, 0, sp[0], sp[1], r)
+        g.add_color_stop_rgba(0, 0.62 + 0.3 * lit, 0.45 + 0.15 * lit, 0.3, 0.92 * strength)
+        g.add_color_stop_rgba(0.7, 0.42, 0.32, 0.23, 0.85 * strength)
+        g.add_color_stop_rgba(1, 0.35, 0.27, 0.2, 0)
+        ctx.set_source(g)
+        ctx.arc(sp[0], sp[1], r, 0, TAU)
+        ctx.fill()
+    for i in range(40):  # debris flung ahead of the front
+        z = w + 2 + 10 * rnd(i, 64)
+        sp, sc = project(cam, (-15 + 30 * rnd(i, 65), 0.5 + 9 * rnd(i, 66), z))
+        if sp is None:
+            continue
+        s = (0.2 + 0.5 * rnd(i, 67)) * sc
+        ctx.save()
+        ctx.translate(*sp)
+        ctx.rotate(t * 7 + i)
+        ctx.rectangle(-s, -s * 0.4, 2 * s, 0.8 * s)
+        ctx.set_source_rgba(0.2, 0.15, 0.12, 0.9 * strength)
+        ctx.fill()
+        ctx.restore()
 
 
 def shot_flash(ctx, t, d, gt):
-    cam = Camera((1.6, 1.62, -1.0 - 0.4 * t), (1.2, 1.6, -21), 55)
-    street_world(ctx, cam, t, extra=pedestrians(t * 0.3 + 2, 16, 2, z0=-5, z1=-50))
+    since = gt - TL["events"]["flash"]
+    w = wave_z(gt)
+    near = clamp(1 - (-1.6 - w) / 60)  # the ground shakes as the wave closes in
+    j = np.array([math.sin(gt * 53), math.sin(gt * 41 + 1), 0]) * 0.05 * near ** 2
+    cam = Camera(np.array((1.6, 1.62, -1.0 - 0.15 * t)) + j, np.array((1.2, 1.8, -21)) + j * 2, 55)
+    lit = clamp(since / 0.3)
+    # after the flash the light comes from the fireball ahead: everything facing you falls into shadow
+    light = Sun((0.03, 0.35, -0.94), (1.0, 0.82 - 0.1 * lit, 0.62 - 0.15 * lit), 0.55 - 0.2 * lit, 0.55 + 0.4 * lit) \
+        if since > 0 else DAY
+
+    def burning_sky():
+        if since > 0:
+            g = cairo.LinearGradient(0, 0, 0, H * 0.55)
+            g.add_color_stop_rgba(0, 0.55, 0.25, 0.1, 0.55 * lit)
+            g.add_color_stop_rgba(1, 1.0, 0.6, 0.3, 0.45 * lit)
+            ctx.set_source(g)
+            ctx.paint()
+            fireball(ctx, cam, since)
+    walkers = [] if since > 0.4 else pedestrians(t * 0.3 + 2, 16, 2, z0=-5, z1=-50)
+    street_world(ctx, cam, t, light=light, extra=walkers, wave=w if since > 0.9 else None, after_sky=burning_sky)
+    if since > 0.9:
+        dust_wall(ctx, cam, w, gt)
     a = flash_amount(gt)
-    g = cairo.RadialGradient(W * 0.55, H * 0.3, 0, W * 0.55, H * 0.3, H)
-    g.add_color_stop_rgba(0, 1, 1, 0.97, min(1, a * 1.1))
-    g.add_color_stop_rgba(1, 1, 0.97, 0.9, a * 0.92)
-    ctx.set_source(g)
-    ctx.paint()
+    if a > 0:
+        g = cairo.RadialGradient(W * 0.55, H * 0.3, 0, W * 0.55, H * 0.3, H)
+        g.add_color_stop_rgba(0, 1, 1, 0.97, min(1, a * 1.1))
+        g.add_color_stop_rgba(1, 1, 0.97, 0.9, a * 0.92)
+        ctx.set_source(g)
+        ctx.paint()
 
 
 def shot_blast(ctx, t, d, gt):
-    shake = max(0, 1 - t / 2.5)
-    j = np.array([math.sin(t * 61), math.sin(t * 47 + 1), 0]) * 0.12 * shake
-    cam = Camera(np.array((1.6, 1.62, -1.6)) + j, np.array((1.2, 1.7, -21)) + j * 3, 55)
-    damage = smooth(t / 1.6)
-    street_world(ctx, cam, t, light=Sun(tint=(1, 0.9, 0.78)), damage=damage)
-    for i in range(70):  # debris thrown toward you
-        u = (t * 0.9 + rnd(i, 21)) % 1.0
-        if t < 0.2:
-            break
-        p = np.array([rnd(i, 22) * 16 - 8, 0.5 + rnd(i, 23) * 6 + u * 2, -40 + u * 42])
+    """Impact: the wave hits, the camera is thrown back and tilted, debris and dust swallow everything."""
+    knock = 1 - math.exp(-t * 9)
+    shake = math.exp(-t * 1.1)
+    j = np.array([math.sin(t * 67), math.sin(t * 53 + 1), math.sin(t * 31)]) * 0.28 * shake
+    pos = np.array((1.6, 1.62 - 0.9 * knock, -1.6 + 1.2 * knock)) + j
+    look = np.array((1.2 + 3 * knock, 1.6 - 5 * knock, -21)) + j * 4
+    cam = Camera(pos, look, 55 + 6 * knock)
+    roll = 0.16 * knock + 0.07 * math.sin(t * 23) * shake
+    ctx.save()
+    ctx.translate(W / 2, H / 2)
+    ctx.rotate(roll)
+    ctx.scale(1.18, 1.18)  # hide the corners while the frame is rolled
+    ctx.translate(-W / 2, -H / 2)
+
+    def burning_sky():
+        g = cairo.LinearGradient(0, 0, 0, H * 0.6)
+        g.add_color_stop_rgba(0, 0.5, 0.22, 0.1, 0.7)
+        g.add_color_stop_rgba(1, 0.9, 0.5, 0.25, 0.6)
+        ctx.set_source(g)
+        ctx.paint()
+        fireball(ctx, cam, gt - TL["events"]["flash"])
+    street_world(ctx, cam, t, light=Sun((0.03, 0.35, -0.94), (1.0, 0.72, 0.48), 0.38, 0.9),
+                 wave=wave_z(gt), after_sky=burning_sky)
+    for i in range(150):  # debris hurled past you
+        u = (t * 1.3 + rnd(i, 21)) % 1.0
+        p = np.array([rnd(i, 22) * 20 - 10, 0.3 + rnd(i, 23) * 7 + u * 2.5, -30 + u * 34])
         sp, sc = project(cam, p)
         if sp is None:
             continue
-        s = (0.15 + rnd(i, 24) * 0.4) * sc
+        s = (0.12 + rnd(i, 24) * 0.5) * sc
         ctx.save()
         ctx.translate(*sp)
-        ctx.rotate(t * 5 + i)
-        ctx.rectangle(-s, -s * 0.5, 2 * s, s)
-        ctx.set_source_rgba(0.25, 0.2, 0.16, 0.9)
+        ctx.rotate(t * 9 + i)
+        ctx.rectangle(-s, -s * 0.45, 2 * s, 0.9 * s)
+        ctx.set_source_rgba(0.22, 0.17, 0.13, 0.92)
         ctx.fill()
         ctx.restore()
-    dust = smooth((t - 0.3) / 2.2)  # the dust wall rolling in
-    for i in range(26):
+    ctx.restore()
+    dust = 0.55 + 0.45 * smooth(t / 1.2)  # you're inside the dust from the first instant
+    for i in range(30):
         x = rnd(i, 30) * W
-        y = H * (0.25 + 0.55 * rnd(i, 31))
-        r = (220 + 400 * rnd(i, 32)) * (0.4 + dust)
+        y = H * (0.15 + 0.75 * rnd(i, 31))
+        r = (260 + 420 * rnd(i, 32)) * (0.5 + dust)
         g = cairo.RadialGradient(x, y, 0, x, y, r)
-        g.add_color_stop_rgba(0, 0.42, 0.33, 0.24, 0.55 * dust)
-        g.add_color_stop_rgba(1, 0.42, 0.33, 0.24, 0)
+        g.add_color_stop_rgba(0, 0.42, 0.31, 0.22, 0.75 * dust)
+        g.add_color_stop_rgba(1, 0.42, 0.31, 0.22, 0)
         ctx.set_source(g)
         ctx.arc(x, y, r, 0, TAU)
         ctx.fill()
-    overlay(ctx, (1, 0.97, 0.9, max(0.0, 0.6 - t * 0.6)))
+    overlay(ctx, (1.0, 0.55, 0.25, 0.5 * math.exp(-t * 5)))  # the heat of the impact (warm, not a second white flash)
+    overlay(ctx, (0.12, 0.08, 0.06, 0.75 * smooth((t - 1.2) / (d - 1.2))))  # sinking into darkness
 
 
 def shot_dust(ctx, t, d, gt):
@@ -858,7 +988,8 @@ def _build_timeline():
                          for w, (s, e) in zip(sw[k:k + n], times[k:k + n])]
             kk = 0
             for name, nw in shot_list:
-                shots.append(dict(name=name, t0=max(0.0, seg_words[kk]["t0"] - 0.1) if shots else 0.0))
+                lead = SHOT_LEAD.get(name, 0.1)  # the impact lands well before the narration resumes
+                shots.append(dict(name=name, t0=max(0.0, seg_words[kk]["t0"] - lead) if shots else 0.0))
                 kk += nw
             assert kk == n, f"shot word counts don't add up for: {seg_text}"
             words += seg_words
@@ -872,7 +1003,7 @@ def _build_timeline():
     blast = next(s["t0"] for s in shots if s["name"] == "blast")
     end_voice = words[-1]["t1"]
     return dict(words=words, chunks=base.caption_chunks(words), shots=shots, total=total, clips=clips, sr=sr,
-                events=dict(flash=flash, blast=blast, end=end_voice))
+                events=dict(flash=flash, blast=blast, impact=blast, end=end_voice))
 
 
 # ============================================================================ frames
@@ -978,14 +1109,26 @@ def synth_audio(tl, path):
     f = ev["flash"]
     x = tt - f
     ring = np.where(x > 0, np.sin(TAU * 3700 * tt) * np.exp(-np.clip(x, 0, None) * 0.55), 0)
-    sfx += 0.05 * ring * (x < 7)
-    # the boom
+    sfx += 0.05 * ring * (x < 7) * (tt < ev["blast"])
+    # the shockwave: a low rumble swelling as it races closer, then the impact
     b = ev["blast"]
+    ws = f + 0.9
+    approach = np.clip((tt - ws) / (b - ws), 0, 1) ** 2.5 * (tt < b)
+    sfx += 0.55 * band_noise(n, 18, 140, sr, 12) * approach
+    sfx += 0.12 * band_noise(n, 140, 900, sr, 13) * approach ** 2
     x = np.clip(tt - b, 0, None)
-    rumble = band_noise(n, 20, 260, sr, 7)
-    boom = (np.sin(TAU * np.cumsum(55 - 25 * np.clip(x / 2, 0, 1)) / sr) * 0.8 + rumble) * np.exp(-x * 0.9)
-    sfx += 0.9 * boom * (tt >= b) * np.clip(x / 0.03, 0, 1)
-    sfx += 0.15 * band_noise(n, 800, 5000, sr, 8) * np.exp(-x * 3) * (tt >= b)
+    hit = (tt >= b) * np.clip(x / 0.004, 0, 1)
+    boom = 1.1 * np.sin(TAU * np.cumsum(48 - 22 * np.clip(x / 1.5, 0, 1)) / sr) * np.exp(-x * 1.4)  # sub-bass hit
+    boom += 0.9 * band_noise(n, 120, 4500, sr, 8) * np.exp(-x * 5)  # the crack
+    boom += 0.5 * band_noise(n, 18, 220, sr, 7) * np.exp(-x * 0.55)  # long rumble tail
+    sfx += np.tanh(1.6 * boom * hit) * 0.95
+    clatter = np.zeros(n)
+    for k in range(260):  # debris landing
+        i = int((b + rng.uniform(0.05, 3.0) ** 1.3) * sr)
+        if i < n - 400:
+            clatter[i:i + 300] += rng.uniform(-1, 1) * np.exp(-np.arange(300) / rng.uniform(20, 60))
+    sfx += 0.18 * clatter
+    sfx += 0.035 * np.sin(TAU * 3200 * tt) * np.exp(-x * 0.45) * (tt >= b + 0.3)  # ears ringing afterwards
     # afterwards: wind and fire
     after = env(b + 1.5, tl["shots"][[s["name"] for s in tl["shots"]].index("shadow")]["t1"], 1.5)
     wind = band_noise(n, 60, 500, sr, 9) * (0.6 + 0.4 * np.sin(TAU * 0.11 * tt))

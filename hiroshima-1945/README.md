@@ -1,6 +1,6 @@
 # Hiroshima, 1945: A Pedestrian's View
 
-A 54-second vertical short (1080×1920, 30 fps) about the morning of 6 August 1945, told in the second person from the street. It is built from widely documented survivor (hibakusha) testimony.
+A 55-second vertical short (1080×1920, 30 fps) about the morning of 6 August 1945, told in the second person from the street. It is built from widely documented survivor (hibakusha) testimony.
 
 ![one frame every 3 seconds](video/preview.png)
 
@@ -16,8 +16,8 @@ A 54-second vertical short (1080×1920, 30 fps) about the morning of 6 August 19
 ## Approach
 
 - **Respectful by design.** People are simple faceless figures, mostly seen from behind or at a distance. Injuries are not shown. The palette is muted and the music is sparse.
-- **One flash.** The detonation is a single white-out with a slow fade, not a strobe. Viewers sensitive to bright flashes should still be aware of it at about 0:13.
-- **Sound.** Morning cicadas, birds and a streetcar bell cut to a ringing silence at the flash, then the blast, then wind and fire. The ending has water and a quiet piano.
+- **The explosion.** A single white-out (not a strobe) fades to reveal a fireball over the city, turning the sky orange and everything facing you into silhouette. A wall of dust then races down the street, flattening houses, while the ground trembles. At impact the camera is thrown back and tilted into a warm burst of heat, debris and dust. Viewers sensitive to bright flashes should be aware of the flash at about 0:13.
+- **Sound.** Morning cicadas, birds and a streetcar bell cut to a ringing silence at the flash. A low rumble swells as the shockwave approaches, then comes a sub-bass hit, a crack and a long rumble with debris landing, then deafened ringing, wind and fire. The narration pauses so the impact lands on its own. The ending has water and a quiet piano.
 - **Ending.** Present-day peace lanterns float on the river below the Atomic Bomb Dome.
 
 ## Accuracy notes
