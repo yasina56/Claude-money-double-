@@ -1,6 +1,6 @@
 # Why Do Cats Make Biscuits?
 
-> Also in this repo: [**While You're at Work**](while-youre-at-work/), a narrated low-poly 3D cat short.
+> Also in this repo: [**While You're at Work**](while-youre-at-work/), a narrated low-poly 3D cat short, and [**Hiroshima, 1945**](hiroshima-1945/), a pedestrian's view of 6 August 1945.
 
 A 57-second vertical explainer video (for Shorts, Reels or TikTok) about why cats knead. A cartoon cat walks through five theories, then gives tips for when the claws come out.
 
